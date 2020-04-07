@@ -7,11 +7,12 @@ channels:
   - defaults
 dependencies:
   - conda-forge::python=3.7.3
-  # TODO nf-core: Add required software dependencies here
+  - conda-forge::pip=20.0.2  
+# TODO nf-core: Add required software dependencies here
   - bioconda::bowtie2=2.4.1
   - bioconda::fastqc=0.11.8
-  - bioconda::gffcompar=0.11.2
-  - bioconda::multiqc=1.7i
+  - bioconda::gffcompare=0.11.2
+  - bioconda::multiqc=1.7
   - bioconda::picard=2.22.2
   - bioconda::samtools=1.10
   - bioconda::STAR=2.7.3a
