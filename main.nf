@@ -241,7 +241,7 @@ process sortBam{
   set sampName, species, file(tmp) from alignment
 
   output:
-  file("${sampName}"."${species}".bam) into bamsort
+  file("${sampName}"."${species}".bam) into bamSort
 
   """
   samtools sort -o "${sampName}"."${species}".bam $tmp
@@ -254,14 +254,14 @@ process indexBams {
   publishDir "results/alignments_human", mode: 'copy'
 
   input:
-  file(bam) from bamsort
+  set val(sampName), val(species), file(bam) from virusBamsort
 
   output:
-  file("${bam}.bai") into bamsidx
-  file("${bam}") into bamsout
+  set val(sampName), val(species), file("*.bam") into bamsOut
+  file("*bai") into bamsidx
 
   """
-  samtools index -b $bam
+  samtools index -b "${sampName}"."${species}".bam
   """
 }
 
