@@ -295,22 +295,23 @@ process indexBams {
 Channel
     .from(bamsOut)
     .branch {
-        virus:
-        human:
+        virus: it.filter(~/*SARS_COV.*/)
+        human: it.filter(~/*hg38.*/)
         }
     .set{bams}
 
-bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
+// bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
 
 process makeSharedList {
 
   input:
-  set sampID, file(human), file(virus) from bams
+  set val(sampName), val(species), file(humanBam), from bams.human
+  set val(sampName), val(species), file(virusBam), from bams.virus
 
   output:
   file("shared.list") into sharedReads
-  set sampID, file(human) into humanBams
-  set sampID, file(virus) into virusBams
+  set sampID, file(human) into humanList
+  set sampID, file(virus) into virusList
 
   """
   samtools view -F4 $human | awk '{print $1}' | sort | uniq > human.list
