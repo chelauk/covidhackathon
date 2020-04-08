@@ -198,35 +198,32 @@ process get_software_versions {
     """
 }
 
-refDir = params.refDir
 fastaRef = Channel.
-              fromFilePairs(${refDir}'/*{"hg38","COV_SARS2"}.fa'}
+              fromPath('${params.fasta}/*.fa'}
 
 process createIndex {
     tag {reference}
 
     publishDir params.outdir, mode: params.publishDirMode,
-        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${it}" : null }
+        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${species}/${it}" : null }
 
     input:
-    file(fasta) from fastaRef
+    set val(species = "${fasta.baseName}"), file(fasta) from fastaRef
 
     output:
-    file("${human}*") into bowtieIdx
+    file(*) into bowtie2Index
 
     script:
     """
-    bowtie2-build -p ${task.cpu} ${reference} ${index}
+    bowtie2-build -p ${task.cpu} ${fasta} ${species}
     """
 }
 
 process mapReads {
 
   input:
-  file(reads) from ch_read_files_fastqc
-  file(genome) from genomeIdx
-  val(cores) from cores
-  val(human) from virus
+  set val(sampName), file(reads) from ch_read_files_fastqc
+  set val(species), file(index) from bowtie2Index
 
   output:
   set sampName, virus, file("temp.bam") into alignment
