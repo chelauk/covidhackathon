@@ -269,8 +269,7 @@ process indexBams {
  * Step 3 : Identify common reads mapped to both viral and human reference genome
  */
 
-params.alignmentPath = ""
-params.virus = "COV_SARS2"
+bams =
 
 bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
 
