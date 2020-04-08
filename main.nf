@@ -264,12 +264,41 @@ process indexBams {
   samtools index -b "${sampName}"."${species}".bam
   """
 }
-
 /*
- * Step 3 : Identify common reads mapped to both viral and human reference genome
+ * The branch operator allows you to forward the items emitted by a source
+ * channel to one or more output channels, choosing one out of them at a time.
+ *
+ * The selection criteria is defined by specifying a closure that provides one
+ * or more boolean expression, each of which is identified by a unique label.
+ * On the first expression that evaluates to a true value, the current item is
+ * bound to a named channel as the label identifier. For example:
+ *
+ * Channel
+ *    .from(1,2,3,40,50)
+ *    .branch {
+ *        small: it < 10
+ *        large: it > 10
+ *    }
+ *    .set { result }
+ *  result.small.view { "$it is small" }
+ *  result.large.view { "$it is large" }
+ *
+ * it shows
+ * 1 is small
+ * 2 is small
+ * 3 is small
+ * 40 is large
+ * 50 is large
+ *
  */
 
-bams =
+Channel
+    .from(bamsOut)
+    .branch {
+        virus:
+        human:
+        }
+    .set{bams}
 
 bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
 
