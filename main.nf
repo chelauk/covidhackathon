@@ -341,10 +341,10 @@ process filterVirus {
   set sampName, file(virus) from virusList
 
   output:
-  file("${sampName}_virus.uniq.bam") into virusFinal
+  file("${sampName}""_virus.uniq.bam") into virusFinal
 
   """
-  picard FilterSamReads I=$virus O="${sampID}_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
+  picard FilterSamReads I=$virus O="${sampID}""_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
 
