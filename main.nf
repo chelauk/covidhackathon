@@ -309,13 +309,13 @@ process makeSharedList {
   set val(sampName), val(species), file(virusBam), from bams.virus
 
   output:
-  file("shared.list") into sharedReads
-  set sampID, file(human) into humanList
-  set sampID, file(virus) into virusList
+  file("shared.list") into sharedList
+  set val(sampName), file("human.list") into humanList
+  set val(sampName), file("virus.list") into virusList
 
   """
-  samtools view -F4 $human | awk '{print $1}' | sort | uniq > human.list
-  samtools view -F4 $virus | awk '{print $1}' | sort | uniq > virus.list
+  samtools view -F4 "${humanBam}" | awk '{print $1}' | sort | uniq > human.list
+  samtools view -F4 "${virusBam}" | awk '{print $1}' | sort | uniq > virus.list
   cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if($1==2) {print $2}}' > shared.list
   ​"""
 }
@@ -323,25 +323,25 @@ process makeSharedList {
 process filterHuman {
 
   input:
-  file(sharedReads) from sharedReads
-  set sampID, file(human) from humanBams
+  file(sharedReads) from sharedList
+  set sampID, file(human) from humanList
 
   output:
-  file("${sampID}_human.uniq.bam") into humanFinal
+  file("${sampName}"."_human.uniq.bam") into humanFinal
 
   """
-  picard FilterSamReads I=$human O="${sampID}_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
+  picard FilterSamReads I=$human O="${sampName}""_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
 
 process filterVirus {
 
   input:
-  file(sharedReads) from sharedReads
-  set sampID, file(virus) from virusBams
+  file(sharedReads) from sharedList
+  set sampName, file(virus) from virusList
 
   output:
-  file("${sampID}_virus.uniq.bam") into virusFinal
+  file("${sampName}_virus.uniq.bam") into virusFinal
 
   """
   picard FilterSamReads I=$virus O="${sampID}_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
