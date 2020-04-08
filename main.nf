@@ -13,7 +13,9 @@ def helpMessage() {
     // TODO nf-core: Add to this help message with new command line parameters
     log.info nfcoreHeader()
     log.info"""
-
+    This pipeline aligns viral sequences to human and viral references
+    discards reads common to both
+    
     Usage:
 
     The typical command for running the pipeline is as follows:
@@ -30,7 +32,8 @@ def helpMessage() {
       --single_end [bool]             Specifies that the input is single-end reads
 
     References                        If not specified in the configuration file or you wish to overwrite any of the references
-      --fasta [file]                  Path to fasta reference
+      --hfasta [file]                 Path to human fasta reference
+      --vfasta [file]                 Path to viral fasta reference
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -69,8 +72,11 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 //   input:
 //   file fasta from ch_fasta
 //
-params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
+params.hfasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
+if (params.hfasta) { ch_hfasta = file(params.hfasta, checkIfExists: true) }
+params.vfasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
+if (params.vfasta) { ch_vfasta = file(params.vfasta, checkIfExists: true) }
+
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -428,27 +434,23 @@ def checkHostname() {
  * STEP 2(a) - Align across human reference genome
  */
  
-
-params.fasta
-params.cores = 1
-
-fastaRef = file(params.fasta)
-human = fasta.simpleName
-cores = params.cores
+fastaRef = hfasta.join(vfasta)
 
 process createIndex {
-    
+    tag {reference}
 
+    publishDir params.outdir, mode: params.publishDirMode,
+        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${it}" : null }
+    
     input:
     file(fasta) from fastaRef
-    val(human) from human
     
     output:
-    file("${human}*") into genomeIdx
+    file("${human}*") into bowtieIdx
 
     script:
     """
-    /app/bowtie2-2.4.1-linux-x86_64/bowtie2-build $fasta $human
+    bowtie2-build -p ${task.cpu} ${reference} ${index}
     """
 }
 
