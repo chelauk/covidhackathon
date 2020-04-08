@@ -32,8 +32,7 @@ def helpMessage() {
       --single_end [bool]             Specifies that the input is single-end reads
 
     References                        If not specified in the configuration file or you wish to overwrite any of the references
-      --hfasta [file]                 Path to human fasta reference
-      --vfasta [file]                 Path to viral fasta reference
+      -fasta [file]                 Path to human fasta reference
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -72,11 +71,8 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 //   input:
 //   file fasta from ch_fasta
 //
-params.hfasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.hfasta) { ch_hfasta = file(params.hfasta, checkIfExists: true) }
-params.vfasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.vfasta) { ch_vfasta = file(params.vfasta, checkIfExists: true) }
-
+params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
+if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -202,9 +198,9 @@ process get_software_versions {
     """
 }
 
-
-
-fastaRef = hfasta.join(vfasta)
+refDir = params.refDir
+fastaRef = Channel.
+              fromFilePairs(${refDir}'/*{"hg38","COV_SARS2"}.fa'}
 
 process createIndex {
     tag {reference}
@@ -226,7 +222,6 @@ process createIndex {
 
 process mapReads {
 
-
   input:
   file(reads) from ch_read_files_fastqc
   file(genome) from genomeIdx
@@ -244,8 +239,6 @@ process mapReads {
 
 // Sort bam
 process sortBam{
-
-
 
   input:
   set sampName, virus, file(tmp) from alignment
@@ -274,7 +267,6 @@ process indexBams {
   samtools index -b $bam
   """
 }
-
 
 /*
  * Step 2(b) : Align reads against virus references
