@@ -226,11 +226,11 @@ process mapReads {
   set val(species), file(index) from bowtie2Index
 
   output:
-  set sampName, virus, file("temp.bam") into alignment
+  set sampName, species, file("*temp.bam") into alignment
 
   """
-  bowtie2 -p $cores -x $virus -U $fastq -S temp.sam
-  samtools view -bS temp.sam > temp.bam
+  bowtie2 -x ${index} -U ${fastq} -S ${sampName}.${species}.temp.sam
+  samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
   """
 }
 
@@ -238,13 +238,13 @@ process mapReads {
 process sortBam{
 
   input:
-  set sampName, virus, file(tmp) from alignment
+  set sampName, species, file(tmp) from alignment
 
   output:
-  file("${sampName}_${virus}.bam") into bamsort
+  file("${sampName}"."${species}".bam) into bamsort
 
   """
-  samtools sort -o "${sampName}_${virus}.bam" $tmp
+  samtools sort -o "${sampName}"."${species}".bam $tmp
   """
 }
 
