@@ -202,77 +202,123 @@ process get_software_versions {
     """
 }
 
- /*
-  * STEP 1 - FastQC
-  */
- process fastqc {
-     tag "$name"
-     label 'process_medium'
-     publishDir "${params.outdir}/fastqc", mode: 'copy',
-         saveAs: { filename ->
-                       filename.indexOf(".zip") > 0 ? "zips/$filename" : "$filename"
-                 }
-
-     input:
-     set val(name), file(reads) from ch_read_files_fastqc
-
-     output:
-     file "*_fastqc.{zip,html}" into ch_fastqc_results
-
-     script:
-     """
-     fastqc --quiet --threads $task.cpus $reads
-     """
- }
 
 
-/*
- * create indices
- */
+fastaRef = hfasta.join(vfasta)
 
-fastaRef = hfasta.join.(vfasta)
-
-if create index
 process createIndex {
+    tag {reference}
 
-    tag "$name"
-    label 'process_high'
-
-    publishDir "${params.outdir}/genome_index", mode: 'copy'
+    publishDir params.outdir, mode: params.publishDirMode,
+        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${it}" : null }
 
     input:
     file(fasta) from fastaRef
-    val(species) from ${fastaRef.baseName}
 
     output:
-    file ${homo*} into humanGenomeIdx
-    file ${cov*}  into virusGenomeIdx
-    script:
+    file("${human}*") into bowtieIdx
 
+    script:
     """
-    bowtie2-build $fasta $species
+    bowtie2-build -p ${task.cpu} ${reference} ${index}
     """
 }
 
+process mapReads {
 
-refIndices = humanGenomeIdx.join(virusGenomeIdx)
+
+  input:
+  file(reads) from ch_read_files_fastqc
+  file(genome) from genomeIdx
+  val(cores) from cores
+  val(human) from virus
+
+  output:
+  set sampName, virus, file("temp.bam") into alignment
+
+  """
+  bowtie2 -p $cores -x $virus -U $fastq -S temp.sam
+  samtools view -bS temp.sam > temp.bam
+  """
+}
+
+// Sort bam
+process sortBam{
+
+
+
+  input:
+  set sampName, virus, file(tmp) from alignment
+
+  output:
+  file("${sampName}_${virus}.bam") into bamsort
+
+  """
+  samtools sort -o "${sampName}_${virus}.bam" $tmp
+  """
+}
+
+// Index bam
+process indexBams {
+
+  publishDir "results/alignments_human", mode: 'copy'
+
+  input:
+  file(bam) from bamsort
+
+  output:
+  file("${bam}.bai") into bamsidx
+  file("${bam}") into bamsout
+
+  """
+  samtools index -b $bam
+  """
+}
+
+
 /*
- * STEP 2(a) - Align across human reference genome
+ * Step 2(b) : Align reads against virus references
  */
+
+params.fastaRef = ""
+params.fastqPath = ""
+params.cores = 1
+
+fastaRef = file(params.fastaRef)
+virus = fastaRef.simpleName
+cores = params.cores
+
+process createIndex {
+
+  input:
+  file(fasta) from fastaRef
+  val(virus) from virus
+
+  output:
+  file("${virus}*") into genomeIdx
+
+
+  //Add path to binary as it is not in path
+  """
+  /app/bowtie2-2.4.1-linux-x86_64/bowtie2-build $fasta $virus
+  """
+
+}
 
 process mapReads {
 
   input:
-  val(sampName), file(reads) from ch_read_files_fastqc
-  file(genome) from refIndices
-  val(species) from ${baseName.refIndices}
+  set sampName, file(reads) from ch_read_files_fastqc
+  file(genome) from genomeIdx
+  val(cores) from cores
+  val(virus) from virus
 
   output:
-  set sampName, species, file("*temp.bam") into alignment
+  set sampName, virus, file("temp.bam") into alignment
 
   """
-  bowtie2 -p -x $reads -U $genome -S ${sampName}.${species}.temp.sam
-  samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
+  bowtie2 -p $cores -x $virus -U $fastq -S temp.sam
+  samtools view -bS temp.sam > temp.bam
   """
 }
 
@@ -280,23 +326,23 @@ process mapReads {
 process sortBam{
 
   input:
-  set sampName, species, file(tmp) from alignment
+  set sampName, virus, file(tmp) from alignment
 
   output:
-  file("${sampName}_${species}.bam") into bamsort
+  file("${sampName}_${virus}.bam") into bamsort
 
   """
-  samtools sort -o "${sampName}_${species}.bam" $tmp
+  samtools sort -o "${sampName}_${virus}.bam" $tmp
   """
 }
 
 // Index bam
 process indexBams {
 
-  publishDir "results/alignments", mode: 'copy'
+  publishDir "results/alignments_virus", mode: 'copy'
 
   input:
-  set sampNames, species, file(bam) from bamsort
+  file(bam) from bamsort
 
   output:
   file("${bam}.bai") into bamsidx
@@ -311,12 +357,15 @@ process indexBams {
  * Step 3 : Identify common reads mapped to both viral and human reference genome
  */
 
-bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,sars_cov2}.bam", flat: true)
+params.alignmentPath = ""
+params.virus = "COV_SARS2"
+
+bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
 
 process makeSharedList {
 
   input:
-  set sampName, file(human), file(virus) from bams
+  set sampID, file(human), file(virus) from bams
 
   output:
   file("shared.list") into sharedReads
@@ -357,7 +406,6 @@ process filterVirus {
   picard FilterSamReads I=$virus O="${sampID}_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
-
 
 
 /*
@@ -563,212 +611,4 @@ def checkHostname() {
             }
         }
     }
-}
-
-
-/*
- * STEP 2(a) - Align across human reference genome
- */
-
-fastaRef = hfasta.join(vfasta)
-
-process createIndex {
-    tag {reference}
-
-    publishDir params.outdir, mode: params.publishDirMode,
-        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${it}" : null }
-
-    input:
-    file(fasta) from fastaRef
-
-    output:
-    file("${human}*") into bowtieIdx
-
-    script:
-    """
-    bowtie2-build -p ${task.cpu} ${reference} ${index}
-    """
-}
-
-process mapReads {
-
-
-  input:
-  file(reads) from ch_read_files_fastqc
-  file(genome) from genomeIdx
-  val(cores) from cores
-  val(human) from virus
-
-  output:
-  set sampName, virus, file("temp.bam") into alignment
-
-  """
-  bowtie2 -p $cores -x $virus -U $fastq -S temp.sam
-  samtools view -bS temp.sam > temp.bam
-  """
-}
-
-// Sort bam
-process sortBam{
-
-
-
-  input:
-  set sampName, virus, file(tmp) from alignment
-
-  output:
-  file("${sampName}_${virus}.bam") into bamsort
-
-  """
-  samtools sort -o "${sampName}_${virus}.bam" $tmp
-  """
-}
-
-// Index bam
-process indexBams {
-
-  publishDir "results/alignments_human", mode: 'copy'
-
-  input:
-  file(bam) from bamsort
-
-  output:
-  file("${bam}.bai") into bamsidx
-  file("${bam}") into bamsout
-
-  """
-  samtools index -b $bam
-  """
-}
-
-
-/*
- * Step 2(b) : Align reads against virus references
- */
-
-params.fastaRef = ""
-params.fastqPath = ""
-params.cores = 1
-
-fastaRef = file(params.fastaRef)
-virus = fastaRef.simpleName
-cores = params.cores
-
-process createIndex {
-
-  input:
-  file(fasta) from fastaRef
-  val(virus) from virus
-
-  output:
-  file("${virus}*") into genomeIdx
-
-
-  //Add path to binary as it is not in path
-  """
-  /app/bowtie2-2.4.1-linux-x86_64/bowtie2-build $fasta $virus
-  """
-
-}
-
-process mapReads {
-
-  input:
-  set sampName, file(reads) from ch_read_files_fastqc
-  file(genome) from genomeIdx
-  val(cores) from cores
-  val(virus) from virus
-
-  output:
-  set sampName, virus, file("temp.bam") into alignment
-
-  """
-  bowtie2 -p $cores -x $virus -U $fastq -S temp.sam
-  samtools view -bS temp.sam > temp.bam
-  """
-}
-
-// Sort bam
-process sortBam{
-
-  input:
-  set sampName, virus, file(tmp) from alignment
-
-  output:
-  file("${sampName}_${virus}.bam") into bamsort
-
-  """
-  samtools sort -o "${sampName}_${virus}.bam" $tmp
-  """
-}
-
-// Index bam
-process indexBams {
-
-  publishDir "results/alignments_virus", mode: 'copy'
-
-  input:
-  file(bam) from bamsort
-
-  output:
-  file("${bam}.bai") into bamsidx
-  file("${bam}") into bamsout
-
-  """
-  samtools index -b $bam
-  """
-}
-
-/*
- * Step 3 : Identify common reads mapped to both viral and human reference genome
- */
-
-params.alignmentPath = ""
-params.virus = "COV_SARS2"
-
-bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
-
-process makeSharedList {
-
-  input:
-  set sampID, file(human), file(virus) from bams
-
-  output:
-  file("shared.list") into sharedReads
-  set sampID, file(human) into humanBams
-  set sampID, file(virus) into virusBams
-
-  """
-  samtools view -F4 $human | awk '{print $1}' | sort | uniq > human.list
-  samtools view -F4 $virus | awk '{print $1}' | sort | uniq > virus.list
-  cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if($1==2) {print $2}}' > shared.list
-  ​"""
-}
-
-process filterHuman {
-
-  input:
-  file(sharedReads) from sharedReads
-  set sampID, file(human) from humanBams
-
-  output:
-  file("${sampID}_human.uniq.bam") into humanFinal
-
-  """
-  picard FilterSamReads I=$human O="${sampID}_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
-  """
-}
-
-process filterVirus {
-
-  input:
-  file(sharedReads) from sharedReads
-  set sampID, file(virus) from virusBams
-
-  output:
-  file("${sampID}_virus.uniq.bam") into virusFinal
-
-  """
-  picard FilterSamReads I=$virus O="${sampID}_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
-  """
 }
