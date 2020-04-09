@@ -73,7 +73,7 @@ params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : 
 if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
 
 params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
-if (params.fasta) { ch_gtf = file(params.gtf, checkIfExists: true) }
+if (params.gtf) { ch_gtf = file(params.gtf, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -355,6 +355,25 @@ process filterVirus {
   """
 }
 
+/*
+ * Step 4 : Generate gene counts for human and virus reads(unshared)
+ */
+ 
+
+ process geneCountHuman {
+  
+  refGtf = hgtf.join(vgtf)
+  input:
+  set sampID, file(bam) from humanFinal
+  file(gtf) from refGtf
+  
+  output:
+  file("${sampID}_human_transcripts.gtf") into humanCounts
+  file("${sampID}_human_gene_abun.tab") into humanCounts
+  
+  """
+  stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts.gtf" -G $gtf -A "${sampID}_human_gene_abun.tab"
+  """
 
 
 /*
