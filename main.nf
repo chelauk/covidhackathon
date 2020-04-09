@@ -13,6 +13,8 @@ def helpMessage() {
     // TODO nf-core: Add to this help message with new command line parameters
     log.info nfcoreHeader()
     log.info"""
+    This pipeline aligns viral sequences to human and viral references
+    discards reads common to both
 
     Usage:
 
@@ -32,6 +34,7 @@ def helpMessage() {
     References                        If not specified in the configuration file or you wish to overwrite any of the references
       --fasta [file]                  Path to fasta reference
       --gtf [file]                    Path to GTF file
+
     Other options:
       --outdir [file]                 The output directory where the results will be saved
       --email [email]                 Set this parameter to your e-mail address to get a summary e-mail with details of the run sent to you when the workflow exits
@@ -228,25 +231,22 @@ process get_software_versions {
  * create indices
  */
 
-fastaRef = hfasta.join.(vfasta)
+fastaRef = Channel.
+              fromPath('${params.fasta}/*.fa'}
 
-if create index
 process createIndex {
+    tag {reference}
 
-    tag "$name"
-    label 'process_high'
-
-    publishDir "${params.outdir}/genome_index", mode: 'copy'
+    publishDir params.outdir, mode: params.publishDirMode,
+        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${species}/${it}" : null }
 
     input:
-    file(fasta) from fastaRef
-    val(species) from ${fastaRef.baseName}
+    set val(species = "${fasta.baseName}"), file(fasta) from fastaRef
 
     output:
-    file ${homo*} into humanGenomeIdx
-    file ${cov*}  into virusGenomeIdx
-    script:
+    file(*) into bowtie2Index
 
+    script:
     """
     bowtie2-build $fasta $species
     """
@@ -261,9 +261,8 @@ refIndices = humanGenomeIdx.join(virusGenomeIdx)
 process mapReads {
 
   input:
-  val(sampName), file(reads) from ch_read_files_fastqc
-  file(genome) from refIndices
-  val(species) from ${baseName.refIndices}
+  set val(sampName), file(reads) from ch_read_files_fastqc
+  set val(species), file(index) from bowtie2Index
 
   output:
   set sampName, species, file("*temp.bam") into alignment
@@ -281,10 +280,10 @@ process sortBam{
   set sampName, species, file(tmp) from alignment
 
   output:
-  file("${sampName}_${species}.bam") into bamsort
+  file("${sampName}"."${species}".bam) into bamSort
 
   """
-  samtools sort -o "${sampName}_${species}.bam" $tmp
+  samtools sort -o "${sampName}"."${species}".bam $tmp
   """
 }
 
@@ -310,51 +309,105 @@ process indexBams {
  */
 
 bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,sars_cov2}.bam", flat: true)
+=======
+  publishDir "results/alignments_human", mode: 'copy'
+
+  input:
+  set val(sampName), val(species), file(bam) from virusBamsort
+
+  output:
+  set val(sampName), val(species), file("*.bam") into bamsOut
+  file("*bai") into bamsidx
+
+  """
+  samtools index -b "${sampName}"."${species}".bam
+  """
+}
+
+/*
+ * The branch operator allows you to forward the items emitted by a source
+ * channel to one or more output channels, choosing one out of them at a time.
+ *
+ * The selection criteria is defined by specifying a closure that provides one
+ * or more boolean expression, each of which is identified by a unique label.
+ * On the first expression that evaluates to a true value, the current item is
+ * bound to a named channel as the label identifier. For example:
+ *
+ * Channel
+ *    .from(1,2,3,40,50)
+ *    .branch {
+ *        small: it < 10
+ *        large: it > 10
+ *    }
+ *    .set { result }
+ *  result.small.view { "$it is small" }
+ *  result.large.view { "$it is large" }
+ *
+ * it shows
+ * 1 is small
+ * 2 is small
+ * 3 is small
+ * 40 is large
+ * 50 is large
+ *
+ */
+
+Channel
+    .from(bamsOut)
+    .branch {
+        virus: it.filter(~/*SARS_COV.*/)
+        human: it.filter(~/*hg38.*/)
+        }
+    .set{bams}
+
+// bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
 
 process makeSharedList {
 
   input:
-  set sampName, file(human), file(virus) from bams
+  set val(sampName), val(species), file(humanBam), from bams.human
+  set val(sampName), val(species), file(virusBam), from bams.virus
 
   output:
-  file("shared.list") into sharedReads
-  set sampID, file(human) into humanBams
-  set sampID, file(virus) into virusBams
+  file("shared.list") into sharedList
+  set val(sampName), file("human.list") into humanList
+  set val(sampName), file("virus.list") into virusList
 
   """
-  samtools view -F4 $human | awk '{print $1}' | sort | uniq > human.list
-  samtools view -F4 $virus | awk '{print $1}' | sort | uniq > virus.list
+  samtools view -F4 "${humanBam}" | awk '{print $1}' | sort | uniq > human.list
+  samtools view -F4 "${virusBam}" | awk '{print $1}' | sort | uniq > virus.list
   cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if($1==2) {print $2}}' > shared.list
-  ​"""
+  """
 }
 
 process filterHuman {
 
   input:
-  file(sharedReads) from sharedReads
-  set sampID, file(human) from humanBams
+  file(sharedReads) from sharedList
+  set sampName, file(human) from humanList
 
   output:
-  file("${sampID}_human.uniq.bam") into humanFinal
+  file("${sampName}"."_human.uniq.bam") into humanFinal
 
   """
-  picard FilterSamReads I=$human O="${sampID}_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
+  picard FilterSamReads I=$human O="${sampName}""_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
 
 process filterVirus {
 
   input:
-  file(sharedReads) from sharedReads
-  set sampID, file(virus) from virusBams
+  file(sharedReads) from shareList
+  set sampName, file(virus) from virusList
 
   output:
-  file("${sampID}_virus.uniq.bam") into virusFinal
+  file("${sampName}_virus.uniq.bam") into virusFinal
 
   """
-  picard FilterSamReads I=$virus O="${sampID}_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
+  picard FilterSamReads I=$virus O="${sampName}_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
+
 
 /*
  * Step 4 : Generate gene counts for human and virus reads(unshared)
@@ -455,6 +508,8 @@ process humanGeneAbundance {
  """
  stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts_filtered.gtf" -eB -G "${sampID}_virus_transcripts.gtf" -A "${sampID}_virus_gene_abun.tab"
  """
+}
+
 /*
  * STEP 2 - MultiQC
  */
