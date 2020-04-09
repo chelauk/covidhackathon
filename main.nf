@@ -32,7 +32,8 @@ def helpMessage() {
       --single_end [bool]             Specifies that the input is single-end reads
 
     References                        If not specified in the configuration file or you wish to overwrite any of the references
-      -fasta [file]                 Path to human fasta reference
+      --fasta [file]                  Path to fasta reference
+      --gtf [file]                    Path to GTF file
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -73,6 +74,9 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 //
 params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
 if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
+
+params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
+if (params.gtf) { ch_gtf = file(params.gtf, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -194,9 +198,38 @@ process get_software_versions {
     fastqc --version > v_fastqc.txt
     multiqc --version > v_multiqc.txt
     bowtie2 --version > v_bowtie2.txt
+    stringtie --version > v_stringtie.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
+
+ /*
+  * STEP 1 - FastQC
+  */
+ process fastqc {
+     tag "$name"
+     label 'process_medium'
+     publishDir "${params.outdir}/fastqc", mode: 'copy',
+         saveAs: { filename ->
+                       filename.indexOf(".zip") > 0 ? "zips/$filename" : "$filename"
+                 }
+
+     input:
+     set val(name), file(reads) from ch_read_files_fastqc
+
+     output:
+     file "*_fastqc.{zip,html}" into ch_fastqc_results
+
+     script:
+     """
+     fastqc --quiet --threads $task.cpus $reads
+     """
+ }
+
+
+/*
+ * create indices
+ */
 
 fastaRef = Channel.
               fromPath('${params.fasta}/*.fa'}
@@ -215,9 +248,15 @@ process createIndex {
 
     script:
     """
-    bowtie2-build -p ${task.cpu} ${fasta} ${species}
+    bowtie2-build $fasta $species
     """
 }
+
+
+refIndices = humanGenomeIdx.join(virusGenomeIdx)
+/*
+ * STEP 2(a) - Align across human reference genome
+ */
 
 process mapReads {
 
@@ -229,7 +268,7 @@ process mapReads {
   set sampName, species, file("*temp.bam") into alignment
 
   """
-  bowtie2 -x ${index} -U ${fastq} -S ${sampName}.${species}.temp.sam
+  bowtie2 -p -x $reads -U $genome -S ${sampName}.${species}.temp.sam
   samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
   """
 }
@@ -251,6 +290,26 @@ process sortBam{
 // Index bam
 process indexBams {
 
+  publishDir "results/alignments", mode: 'copy'
+
+  input:
+  set sampNames, species, file(bam) from bamsort
+
+  output:
+  file("${bam}.bai") into bamsidx
+  file("${bam}") into bamsout
+
+  """
+  samtools index -b $bam
+  """
+}
+
+/*
+ * Step 3 : Identify common reads mapped to both viral and human reference genome
+ */
+
+bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,sars_cov2}.bam", flat: true)
+=======
   publishDir "results/alignments_human", mode: 'copy'
 
   input:
@@ -264,6 +323,7 @@ process indexBams {
   samtools index -b "${sampName}"."${species}".bam
   """
 }
+
 /*
  * The branch operator allows you to forward the items emitted by a source
  * channel to one or more output channels, choosing one out of them at a time.
@@ -317,14 +377,14 @@ process makeSharedList {
   samtools view -F4 "${humanBam}" | awk '{print $1}' | sort | uniq > human.list
   samtools view -F4 "${virusBam}" | awk '{print $1}' | sort | uniq > virus.list
   cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if($1==2) {print $2}}' > shared.list
-  ​"""
+  """
 }
 
 process filterHuman {
 
   input:
   file(sharedReads) from sharedList
-  set sampID, file(human) from humanList
+  set sampName, file(human) from humanList
 
   output:
   file("${sampName}"."_human.uniq.bam") into humanFinal
@@ -337,17 +397,118 @@ process filterHuman {
 process filterVirus {
 
   input:
-  file(sharedReads) from sharedList
+  file(sharedReads) from shareList
   set sampName, file(virus) from virusList
 
   output:
-  file("${sampName}""_virus.uniq.bam") into virusFinal
+  file("${sampName}_virus.uniq.bam") into virusFinal
 
   """
-  picard FilterSamReads I=$virus O="${sampID}""_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
+  picard FilterSamReads I=$virus O="${sampName}_virus.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
 
+
+/*
+ * Step 4 : Generate gene counts for human and virus reads(unshared)
+ */
+ 
+ // First run of StringTie to generate gene counts
+ process geneCountHuman {
+  
+  refGtf = hgtf.join(vgtf)
+  
+  input:
+  set sampID, file(bam) from humanFinal
+  file(gtf) from refGtf
+  
+  output:
+  file("${sampID}_human_transcripts.gtf") into humanCounts
+  file("${sampID}_human_gene_abun.tab") into humanCounts
+  
+  """
+  stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts.gtf" -G $gtf -A "${sampID}_human_gene_abun.tab"
+  """
+ } 
+  
+ process geneCountVirus {
+  
+  refGtf = hgtf.join(vgtf)
+  
+  input:
+  set sampID, file(bam) from virusFinal
+  file(gtf) from refGtf
+  
+  output:
+  file("${sampID}_virus_transcripts.gtf") into virusCounts
+  file("${sampID}_virus_gene_abun.tab") into virusCounts
+  
+  """
+  stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts.gtf" -G $gtf -A "${sampID}_virus_gene_abun.tab"
+  """
+ } 
+
+ // generating unified transcriptome.
+process humanTrancriptome {
+ 
+ input:
+ set sampID, file(gtf) from humanCounts 
+ file(gtf) from refGtf
+ 
+ output:
+ file('stringtie_merged_transcripts.gtf') into humanTranscriptome
+ file('assembly_GTF_list.txt') into humanTranscriptome
+ 
+ """
+ stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
+ """
+} 
+
+process virusTrancriptome {
+ 
+ input:
+ set sampID, file(gtf) from virusCounts 
+ file(gtf) from refGtf
+ 
+ output:
+ file('stringtie_merged_transcripts.gtf') into virusTranscriptome
+ file('assembly_GTF_list.txt') into virusTranscriptome
+ 
+ """
+ stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
+ """
+}
+
+// Re-running stringtie on all samples, using merged gtf as reference genome(-g)
+
+process humanGeneAbundance {
+
+ input:
+ set sampID, file(bam) from humanFinal
+ file('stringtie_merged_transcripts.gtf') from humanTranscriptome
+ 
+ output:
+ file("${sampID}_human_transcripts.gtf") into finalHumanCounts
+ file("${sampID}_human_gene_abun.tab") into finalHumanCounts
+ 
+ """
+ stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts_filtered.gtf" -eB -G "${sampID}_human_transcripts.gtf" -A "${sampID}_human_gene_abun.tab"
+ """
+ 
+ process virusGeneAbundance {
+
+ input:
+ set sampID, file(bam) from virusFinal
+ file('stringtie_merged_transcripts.gtf') from virusTranscriptome
+ 
+ output:
+ file("${sampID}_virus_transcripts.gtf") into finalVirusCounts
+ file("${sampID}_virus_gene_abun.tab") into finalVirusCounts
+ 
+ """
+ stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts_filtered.gtf" -eB -G "${sampID}_virus_transcripts.gtf" -A "${sampID}_virus_gene_abun.tab"
+ """
+}
 
 /*
  * STEP 2 - MultiQC
