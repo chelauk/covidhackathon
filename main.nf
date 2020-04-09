@@ -232,7 +232,7 @@ process get_software_versions {
  */
 
 fastaRef = Channel.
-              fromPath('${params.fasta}/*.fa'}
+              fromPath('${params.fasta}/*.fa')
 
 process createIndex {
     tag {reference}
