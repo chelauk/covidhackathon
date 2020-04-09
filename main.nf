@@ -445,7 +445,7 @@ process humanGeneAbundance {
  process virusGeneAbundance {
 
  input:
- set sampID, file(bam) from humanFinal
+ set sampID, file(bam) from virusFinal
  file('stringtie_merged_transcripts.gtf') from virusTranscriptome
  
  output:
