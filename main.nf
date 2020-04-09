@@ -360,7 +360,7 @@ process filterVirus {
  * Step 4 : Generate gene counts for human and virus reads(unshared)
  */
  
-
+ // First run of StringTie to generate gene counts
  process geneCountHuman {
   
   refGtf = hgtf.join(vgtf)
@@ -376,6 +376,7 @@ process filterVirus {
   """
   stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts.gtf" -G $gtf -A "${sampID}_human_gene_abun.tab"
   """
+ } 
   
  process geneCountVirus {
   
@@ -392,8 +393,68 @@ process filterVirus {
   """
   stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts.gtf" -G $gtf -A "${sampID}_virus_gene_abun.tab"
   """
+ } 
 
+ // generating unified transcriptome.
+process humanTrancriptome {
+ 
+ input:
+ set sampID, file(gtf) from humanCounts 
+ file(gtf) from refGtf
+ 
+ output:
+ file('stringtie_merged_transcripts.gtf') into humanTranscriptome
+ file('assembly_GTF_list.txt') into humanTranscriptome
+ 
+ """
+ stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
+ """
+} 
 
+process virusTrancriptome {
+ 
+ input:
+ set sampID, file(gtf) from virusCounts 
+ file(gtf) from refGtf
+ 
+ output:
+ file('stringtie_merged_transcripts.gtf') into virusTranscriptome
+ file('assembly_GTF_list.txt') into virusTranscriptome
+ 
+ """
+ stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
+ """
+}
+
+// Re-running stringtie on all samples, using merged gtf as reference genome(-g)
+
+process humanGeneAbundance {
+
+ input:
+ set sampID, file(bam) from humanFinal
+ file('stringtie_merged_transcripts.gtf') from humanTranscriptome
+ 
+ output:
+ file("${sampID}_human_transcripts.gtf") into finalHumanCounts
+ file("${sampID}_human_gene_abun.tab") into finalHumanCounts
+ 
+ """
+ stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts_filtered.gtf" -eB -G "${sampID}_human_transcripts.gtf" -A "${sampID}_human_gene_abun.tab"
+ """
+ 
+ process virusGeneAbundance {
+
+ input:
+ set sampID, file(bam) from humanFinal
+ file('stringtie_merged_transcripts.gtf') from virusTranscriptome
+ 
+ output:
+ file("${sampID}_virus_transcripts.gtf") into finalVirusCounts
+ file("${sampID}_virus_gene_abun.tab") into finalVirusCounts
+ 
+ """
+ stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts_filtered.gtf" -eB -G "${sampID}_virus_transcripts.gtf" -A "${sampID}_virus_gene_abun.tab"
+ """
 /*
  * STEP 2 - MultiQC
  */
