@@ -195,6 +195,7 @@ process get_software_versions {
     fastqc --version > v_fastqc.txt
     multiqc --version > v_multiqc.txt
     bowtie2 --version > v_bowtie2.txt
+    stringtie --version > v_stringtie.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
@@ -363,6 +364,7 @@ process filterVirus {
  process geneCountHuman {
   
   refGtf = hgtf.join(vgtf)
+  
   input:
   set sampID, file(bam) from humanFinal
   file(gtf) from refGtf
@@ -373,6 +375,22 @@ process filterVirus {
   
   """
   stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts.gtf" -G $gtf -A "${sampID}_human_gene_abun.tab"
+  """
+  
+ process geneCountVirus {
+  
+  refGtf = hgtf.join(vgtf)
+  
+  input:
+  set sampID, file(bam) from virusFinal
+  file(gtf) from refGtf
+  
+  output:
+  file("${sampID}_virus_transcripts.gtf") into virusCounts
+  file("${sampID}_virus_gene_abun.tab") into virusCounts
+  
+  """
+  stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts.gtf" -G $gtf -A "${sampID}_virus_gene_abun.tab"
   """
 
 
