@@ -337,8 +337,8 @@ process indexBams {
 Channel
     .from(bamsOut)
     .branch {
-        virus: it.filter(~/*SARS_COV.*/)
-        human: it.filter(~/*hg38.*/)
+        virus: it  ~/SARS_COV/ 
+        human: it  ~/hg38/ 
         }
     .set{bams}
 
