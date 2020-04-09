@@ -355,10 +355,11 @@ process makeSharedList {
   set val(sampName), file("human.list") into humanList
   set val(sampName), file("virus.list") into virusList
 
+  script:
   """
-  samtools view -F4 "${humanBam}" | awk '{print $1}' | sort | uniq > human.list
-  samtools view -F4 "${virusBam}" | awk '{print $1}' | sort | uniq > virus.list
-  cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if($1==2) {print $2}}' > shared.list
+  samtools view -F4 $humanBam | awk '{print \$1}' | sort | uniq > human.list
+  samtools view -F4 $virusBam | awk '{print \$1}' | sort | uniq > virus.list
+  cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if(\$1==2) {print \$2}}' > shared.list
   """
 }
 
