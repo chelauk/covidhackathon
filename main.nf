@@ -31,7 +31,7 @@ def helpMessage() {
 
     References                        If not specified in the configuration file or you wish to overwrite any of the references
       --fasta [file]                  Path to fasta reference
-
+      --gtf [file]                    Path to GTF file
     Other options:
       --outdir [file]                 The output directory where the results will be saved
       --email [email]                 Set this parameter to your e-mail address to get a summary e-mail with details of the run sent to you when the workflow exits
@@ -71,6 +71,9 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 //
 params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
 if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
+
+params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
+if (params.fasta) { ch_gtf = file(params.gtf, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
