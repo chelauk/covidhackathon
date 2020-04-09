@@ -244,7 +244,7 @@ process createIndex {
     set val(species = "${fasta.baseName}"), file(fasta) from fastaRef
 
     output:
-    file(*) into bowtie2Index
+    file("*bt2") into bowtie2Index
 
     script:
     """
