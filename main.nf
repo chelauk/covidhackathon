@@ -477,6 +477,8 @@ process humanGeneAbundance {
  """
  stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts_filtered.gtf" -eB -G "${sampID}_human_transcripts.gtf" -A "${sampID}_human_gene_abun.tab"
  """
+ }
+
  
  process virusGeneAbundance {
 
