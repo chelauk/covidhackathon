@@ -306,25 +306,7 @@ process indexBams {
 
 /*
  * Step 3 : Identify common reads mapped to both viral and human reference genome
- */
-
-bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,sars_cov2}.bam", flat: true)
-=======
-  publishDir "results/alignments_human", mode: 'copy'
-
-  input:
-  set val(sampName), val(species), file(bam) from virusBamsort
-
-  output:
-  set val(sampName), val(species), file("*.bam") into bamsOut
-  file("*bai") into bamsidx
-
-  """
-  samtools index -b "${sampName}"."${species}".bam
-  """
-}
-
-/*
+ *
  * The branch operator allows you to forward the items emitted by a source
  * channel to one or more output channels, choosing one out of them at a time.
  *
