@@ -197,7 +197,8 @@ process get_software_versions {
     echo $workflow.nextflow.version > v_nextflow.txt
     fastqc --version > v_fastqc.txt
     multiqc --version > v_multiqc.txt
-    bowtie2 --version > v_bowtie2.txt
+    STAR --version > v_star.txt
+    HISAT2 --version > v_hisat2.txt
     stringtie --version > v_stringtie.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
@@ -231,27 +232,44 @@ process get_software_versions {
  * create indices
  */
 
-fastaRef = Channel.
-              fromPath('${params.fasta}/*.fa')
+// create STAR index for human reference genome
 
-process createIndex {
+fastaRefHuman = Channel.
+              fromPath('${params.fasta}/*.fa')
+fastaRefVirus = Channel.
+              fromPath('${params.fasta}/*.fa')
+gtfHuman = Channel.
+         fromPath('${params.gtf}/*.gtf')
+gtfVirus = Channel.
+         fromPath('${params.gtf}/*.gtf')              
+
+process createSTARIndex {
     tag {reference}
+    label 'high_memory'
 
     publishDir params.outdir, mode: params.publishDirMode,
-        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${species}/${it}" : null }
+        saveAs: {params.saveGenomeIndex ? "reference_genome/STARIndex/${species}/${it}" : null }
 
     input:
-    set val(species = "${fasta.baseName}"), file(fasta) from fastaRef
+    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefHuman
+    file(gtf) from gtfHuman 
 
     output:
-    file("*bt2") into bowtie2Index
+    file(human_star_index) into star_index
 
-    script:
+    
     """
-    bowtie2-build $fasta $species
+    
+    mkdir HumanSTAR
+    """
+    STAR --runMode genomeGenerate --runThreadN ${task.cpus} --sjdbGTFfile $gtf --genomeDir HumanSTAR --genomeFastaFiles $fasta 
+    """
+    
     """
 }
 
+process createHISATIndex {
+ 
 
 refIndices = humanGenomeIdx.join(virusGenomeIdx)
 /*
