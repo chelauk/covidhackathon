@@ -55,7 +55,7 @@ The nf-core/covidhackathon pipeline comes with documentation about the pipeline,
 
 ## Credits
 
-nf-core/covidhackathon was originally written by Chela James.
+nf-core/covidhackathon was originally written by Chela James and Suhana Bedi.
 
 ## Contributions and Support
 

@@ -232,7 +232,7 @@ process get_software_versions {
  */
 
 fastaRef = Channel.
-              fromPath('${params.fasta}/*.fa'}
+              fromPath('${params.fasta}/*.fa')
 
 process createIndex {
     tag {reference}
@@ -244,7 +244,7 @@ process createIndex {
     set val(species = "${fasta.baseName}"), file(fasta) from fastaRef
 
     output:
-    file(*) into bowtie2Index
+    file("*bt2") into bowtie2Index
 
     script:
     """
@@ -306,25 +306,7 @@ process indexBams {
 
 /*
  * Step 3 : Identify common reads mapped to both viral and human reference genome
- */
-
-bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,sars_cov2}.bam", flat: true)
-=======
-  publishDir "results/alignments_human", mode: 'copy'
-
-  input:
-  set val(sampName), val(species), file(bam) from virusBamsort
-
-  output:
-  set val(sampName), val(species), file("*.bam") into bamsOut
-  file("*bai") into bamsidx
-
-  """
-  samtools index -b "${sampName}"."${species}".bam
-  """
-}
-
-/*
+ *
  * The branch operator allows you to forward the items emitted by a source
  * channel to one or more output channels, choosing one out of them at a time.
  *
@@ -355,8 +337,8 @@ bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,sars_cov2}.bam", fl
 Channel
     .from(bamsOut)
     .branch {
-        virus: it.filter(~/*SARS_COV.*/)
-        human: it.filter(~/*hg38.*/)
+        virus: it  ~/SARS_COV/ 
+        human: it  ~/hg38/ 
         }
     .set{bams}
 
@@ -373,10 +355,11 @@ process makeSharedList {
   set val(sampName), file("human.list") into humanList
   set val(sampName), file("virus.list") into virusList
 
+  script:
   """
-  samtools view -F4 "${humanBam}" | awk '{print $1}' | sort | uniq > human.list
-  samtools view -F4 "${virusBam}" | awk '{print $1}' | sort | uniq > virus.list
-  cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if($1==2) {print $2}}' > shared.list
+  samtools view -F4 $humanBam | awk '{print \$1}' | sort | uniq > human.list
+  samtools view -F4 $virusBam | awk '{print \$1}' | sort | uniq > virus.list
+  cat human.list virus.list | sort | uniq -c | sort -nr | awk '{if(\$1==2) {print \$2}}' > shared.list
   """
 }
 
@@ -494,6 +477,8 @@ process humanGeneAbundance {
  """
  stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts_filtered.gtf" -eB -G "${sampID}_human_transcripts.gtf" -A "${sampID}_human_gene_abun.tab"
  """
+ }
+
  
  process virusGeneAbundance {
 

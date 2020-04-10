@@ -6,12 +6,12 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - conda-forge::python=3.8.1
+  - conda-forge::python=3.7.3
   - conda-forge::libdeflate=1.3
   - conda-forge::r-base=3.6.1
   - conda-forge::r-markdown=1.1
 # TODO nf-core: Add required software dependencies here
-  - bioconda::bowtie2=2.4.1
+  - bioconda::hisat2=2.2.0
   - bioconda::fastqc=0.11.8
   - bioconda::gffcompare=0.11.2
   - bioconda::htslib=1.10.2
