@@ -253,7 +253,7 @@ process createSTARIndex {
     file(gtf) from gtfHuman 
 
     output:
-    file(human_star_index) into star_index
+    file("human_star_index") into star_index
 
     
     """
@@ -274,14 +274,12 @@ process createHISATIndex {
     
     input:
     set val(species = "${fasta.baseName}"), file(fasta) from fastaRefVirus
-    file(gtf) from gtfVirus
     
     output:
-    file(virus_hisat2_index.*.ht2) into hisat2_index
+    file("virus_hisat2_index.*.ht2") into hisat2_index
     
     """
     hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
-    
     """
 }    
     
@@ -314,7 +312,7 @@ process mapReadsVirus {
   
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
-  file(virus_hisat2_index.*.ht2) from hisat2_index
+  file("virus_hisat2_index.*.ht2") from hisat2_index
   
   output:
   set sampName, species, file("*temp.bam") into alignment
