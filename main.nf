@@ -197,7 +197,8 @@ process get_software_versions {
     echo $workflow.nextflow.version > v_nextflow.txt
     fastqc --version > v_fastqc.txt
     multiqc --version > v_multiqc.txt
-    bowtie2 --version > v_bowtie2.txt
+    STAR --version > v_star.txt
+    HISAT2 --version > v_hisat2.txt
     stringtie --version > v_stringtie.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
@@ -231,47 +232,98 @@ process get_software_versions {
  * create indices
  */
 
-fastaRef = Channel.
-              fromPath('${params.fasta}/*.fa')
+// create STAR index for human reference genome
 
-process createIndex {
+fastaRefHuman = Channel.
+              fromPath('${params.fasta}/*.fa')
+fastaRefVirus = Channel.
+              fromPath('${params.fasta}/*.fa')
+gtfHuman = Channel.
+         fromPath('${params.gtf}/*.gtf')              
+
+process createSTARIndex {
     tag {reference}
+    label 'high_memory'
 
     publishDir params.outdir, mode: params.publishDirMode,
-        saveAs: {params.saveGenomeIndex ? "reference_genome/bowtie2Index/${species}/${it}" : null }
+        saveAs: {params.saveGenomeIndex ? "reference_genome/STARIndex/${species}/${it}" : null }
 
     input:
-    set val(species = "${fasta.baseName}"), file(fasta) from fastaRef
+    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefHuman
+    file(gtf) from gtfHuman 
 
     output:
-    file("*bt2") into bowtie2Index
+    file("human_star_index") into star_index
 
-    script:
+    
     """
-    bowtie2-build $fasta $species
+    
+    mkdir HumanSTAR
+       """
+       STAR --runMode genomeGenerate --runThreadN ${task.cpus} --sjdbGTFfile $gtf --genomeDir HumanSTAR --genomeFastaFiles $fasta 
+       """
+    
     """
 }
 
-
-refIndices = humanGenomeIdx.join(virusGenomeIdx)
+process createHISATIndex {
+    tag {reference}
+    
+    publishDir params.outdir, mode: params.publishDirMode,
+        saveAs: {params.saveGenomeIndex ? "reference_genome/hisat2Index/${species}/${it}" : null }
+    
+    input:
+    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefVirus
+    
+    output:
+    file("virus_hisat2_index.*.ht2") into hisat2_index
+    
+    """
+    hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
+    """
+}    
+    
 /*
- * STEP 2(a) - Align across human reference genome
+ * STEP 2(a) - Align across human reference genome (using STAR)
  */
 
-process mapReads {
-
+process mapReadsHuman {
+  
+  label 'high_memory'
+  
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
-  set val(species), file(index) from bowtie2Index
+  file(human_star_index) from star_index
+  file(gtf) from gtfHuman
 
   output:
   set sampName, species, file("*temp.bam") into alignment
-
+  file("Log.final.out"),file("*Log.out"),file("*.out"),file("*Log.out"),file("*Log.final.out"),file("*SJ.out.tab")  into STARlog
+  
+  
   """
-  bowtie2 -p -x $reads -U $genome -S ${sampName}.${species}.temp.sam
-  samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
+  STAR --genomeDir HumanSTAR --sjdbGTFfile $gtf --readFilesIn $reads --runThreadN ${task.cpus} --twopassMode Basic --readFilesCommand zcat --outSAMtype BAM Unsorted
   """
 }
+
+
+process mapReadsVirus {
+
+  
+  input:
+  set val(sampName), file(reads) from ch_read_files_fastqc
+  file("virus_hisat2_index.*.ht2") from hisat2_index
+  
+  output:
+  set sampName, species, file("*temp.bam") into alignment
+  
+  """
+  hisat2 -x $index -U $reads -p ${task.cpus} |
+  
+  samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
+  """
+
+ 
 
 // Sort bam
 process sortBam{
