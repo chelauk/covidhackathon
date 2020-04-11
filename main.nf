@@ -239,8 +239,6 @@ fastaRefHuman = Channel.
 fastaRefVirus = Channel.
               fromPath('${params.fasta}/*.fa')
 gtfHuman = Channel.
-         fromPath('${params.gtf}/*.gtf')
-gtfVirus = Channel.
          fromPath('${params.gtf}/*.gtf')              
 
 process createSTARIndex {
@@ -261,30 +259,51 @@ process createSTARIndex {
     """
     
     mkdir HumanSTAR
-    """
-    STAR --runMode genomeGenerate --runThreadN ${task.cpus} --sjdbGTFfile $gtf --genomeDir HumanSTAR --genomeFastaFiles $fasta 
-    """
+       """
+       STAR --runMode genomeGenerate --runThreadN ${task.cpus} --sjdbGTFfile $gtf --genomeDir HumanSTAR --genomeFastaFiles $fasta 
+       """
     
     """
 }
 
 process createHISATIndex {
- 
-
-refIndices = humanGenomeIdx.join(virusGenomeIdx)
+    tag {reference}
+    
+    publishDir params.outdir, mode: params.publishDirMode,
+        saveAs: {params.saveGenomeIndex ? "reference_genome/hisat2Index/${species}/${it}" : null }
+    
+    input:
+    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefVirus
+    file(gtf) from gtfVirus
+    
+    output:
+    file(virus_hisat2_index.*.ht2) into hisat2_index
+    
+    """
+    hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
+    
+    """
+}    
+    
 /*
- * STEP 2(a) - Align across human reference genome
+ * STEP 2(a) - Align across human reference genome (using STAR)
  */
 
-process mapReads {
-
+process mapReadsHuman {
+  
+  label 'high_memory'
+  publishDir "${params.outdir}", mode: 'copy',
+      saveAs: {params.saveGenomeIndex ? "reference_genome/STARHuman/${species}/${it}" : null }
+  
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
-  set val(species), file(index) from bowtie2Index
+  file(human_star_index) from star_index
 
   output:
-  set sampName, species, file("*temp.bam") into alignment
-
+  set sampName, species, file("*temp.bam") into STARAligned
+  file("Log.final.out"),file("*Log.out"),file("*.out"),file("*Log.out"),file("*Log.final.out"),file("*SJ.out.tab")  into STARlog
+  file("*Aligned.sortedByCoord.out.bam.bai")
+  
   """
   bowtie2 -p -x $reads -U $genome -S ${sampName}.${species}.temp.sam
   samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
