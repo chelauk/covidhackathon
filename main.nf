@@ -308,11 +308,14 @@ process mapReadsHuman {
   file(gtf) from gtfHuman
 
   output:
-  set sampName, species, file("*temp.bam") into alignment
-  file("Log.final.out"),file("*Log.out"),file("*.out"),file("*Log.out"),file("*Log.final.out"),file("*SJ.out.tab")  into STARlog
+  set val(sampName_, file("*Log.final.out"), file ('*.bam') into star_aligned
+  file "*.out" into alignment_logs
+  file "*SJ.out.tab"
+  file "*Log.out" into star_log
+  file "*Unmapped*" optional true
+  file "${prefix}Aligned.sortedByCoord.out.bam.bai" into bam_index_rseqc, bam_index_genebody
 
   script:
-  prefix = reads[0].toString() - ~/(_R1)?(_trimmed)?(_val_1)?(\.fq)?(\.fastq)?(\.gz)?$/
   def star_mem = task.memory ?: params.star_memory ?: false
   def avail_mem = star_mem ? "--limitBAMsortRAM ${star_mem.toBytes() - 100000000}" : ''
   unaligned = params.saveUnaligned ? "--outReadsUnmapped Fastx" : ''
@@ -325,7 +328,7 @@ process mapReadsHuman {
   --twopassMode Basic \\
   --readFilesCommand zcat \\
   --outSAMtype BAM SortedByCoordinate $avail_mem \\
-  --outFileNamePrefix $prefix
+  --outFileNamePrefix $sampName
   """
 }
 
