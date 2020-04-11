@@ -243,7 +243,7 @@ gtfHuman = Channel.
 
 process createSTARIndex {
     label 'high_memory'
-    tag "$fasta" *******
+    tag "$fasta" 
 
     publishDir path: { params.saveReference ? "${params.outdir}/reference_genome" : params.outdir },
         saveAs: { params.saveReference ? it : null }, mode: 'copy'
