@@ -243,7 +243,7 @@ gtfHuman = Channel.
 
 process createSTARIndex {
     label 'high_memory'
-    tag "$fasta" 
+    tag "$fasta"
 
     publishDir path: { params.saveReference ? "${params.outdir}/reference_genome" : params.outdir },
         saveAs: { params.saveReference ? it : null }, mode: 'copy'
@@ -293,6 +293,14 @@ process createHISATIndex {
 process mapReadsHuman {
 
   label 'high_memory'
+  tag "$sampName"
+
+  publishDir "${params.outdir}/STAR", mode: 'copy',
+    saveAs: {filename ->
+        if (filename.indexOf(".bam") == -1) "logs/$filename"
+        else if (params.saveUnaligned && filename != "where_are_my_files.txt" && 'Unmapped' in filename) unmapped/filename
+        else null
+    }
 
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
@@ -303,15 +311,26 @@ process mapReadsHuman {
   set sampName, species, file("*temp.bam") into alignment
   file("Log.final.out"),file("*Log.out"),file("*.out"),file("*Log.out"),file("*Log.final.out"),file("*SJ.out.tab")  into STARlog
 
-
+  script:
+  prefix = reads[0].toString() - ~/(_R1)?(_trimmed)?(_val_1)?(\.fq)?(\.fastq)?(\.gz)?$/
+  def star_mem = task.memory ?: params.star_memory ?: false
+  def avail_mem = star_mem ? "--limitBAMsortRAM ${star_mem.toBytes() - 100000000}" : ''
+  unaligned = params.saveUnaligned ? "--outReadsUnmapped Fastx" : ''
   """
-  STAR --genomeDir HumanSTAR --sjdbGTFfile $gtf --readFilesIn $reads --runThreadN ${task.cpus} --twopassMode Basic --readFilesCommand zcat --outSAMtype BAM Unsorted
+  STAR \\
+  --genomeDir HumanSTAR \\
+  --sjdbGTFfile $gtf \\
+  --readFilesIn $reads \\
+  --runThreadN ${task.cpus} \\
+  --twopassMode Basic \\
+  --readFilesCommand zcat \\
+  --outSAMtype BAM SortedByCoordinate $avail_mem \\
+  --outFileNamePrefix $prefix
   """
 }
 
 
 process mapReadsVirus {
-
 
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
@@ -326,7 +345,7 @@ process mapReadsVirus {
   samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
   """
 
-
+}
 
 // Sort bam
 process sortBam{
