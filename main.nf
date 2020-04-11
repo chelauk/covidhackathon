@@ -239,58 +239,61 @@ fastaRefHuman = Channel.
 fastaRefVirus = Channel.
               fromPath('${params.fasta}/*.fa')
 gtfHuman = Channel.
-         fromPath('${params.gtf}/*.gtf')              
+         fromPath('${params.gtf}/*.gtf')
 
 process createSTARIndex {
-    tag {reference}
     label 'high_memory'
+    tag "$fasta" *******
 
-    publishDir params.outdir, mode: params.publishDirMode,
-        saveAs: {params.saveGenomeIndex ? "reference_genome/STARIndex/${species}/${it}" : null }
+    publishDir path: { params.saveReference ? "${params.outdir}/reference_genome" : params.outdir },
+        saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
     input:
-    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefHuman
-    file(gtf) from gtfHuman 
+    file fasta from fastaRefHuman
+    file gtf from gtfHuman
 
     output:
-    file("human_star_index") into star_index
+    file "HumanSTAR" into star_index
 
-    
+    script:
+    def avail_mem = task.memory ? "--limitGenomeGenerateRAM ${task.memory.toBytes() - 100000000}" : ''
     """
-    
     mkdir HumanSTAR
-       """
-       STAR --runMode genomeGenerate --runThreadN ${task.cpus} --sjdbGTFfile $gtf --genomeDir HumanSTAR --genomeFastaFiles $fasta 
-       """
-    
+    STAR \\
+    --runMode genomeGenerate \\
+    --runThreadN ${task.cpus} \\
+    --sjdbGTFfile $gtf \\
+    --genomeDir HumanSTAR \\
+    --genomeFastaFiles $fasta \\
+    $avail_mem
     """
 }
 
 process createHISATIndex {
     tag {reference}
-    
+
     publishDir params.outdir, mode: params.publishDirMode,
         saveAs: {params.saveGenomeIndex ? "reference_genome/hisat2Index/${species}/${it}" : null }
-    
+
     input:
     set val(species = "${fasta.baseName}"), file(fasta) from fastaRefVirus
-    
+
     output:
     file("virus_hisat2_index.*.ht2") into hisat2_index
-    
+
     """
     hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
     """
-}    
-    
+}
+
 /*
  * STEP 2(a) - Align across human reference genome (using STAR)
  */
 
 process mapReadsHuman {
-  
+
   label 'high_memory'
-  
+
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
   file(human_star_index) from star_index
@@ -299,8 +302,8 @@ process mapReadsHuman {
   output:
   set sampName, species, file("*temp.bam") into alignment
   file("Log.final.out"),file("*Log.out"),file("*.out"),file("*Log.out"),file("*Log.final.out"),file("*SJ.out.tab")  into STARlog
-  
-  
+
+
   """
   STAR --genomeDir HumanSTAR --sjdbGTFfile $gtf --readFilesIn $reads --runThreadN ${task.cpus} --twopassMode Basic --readFilesCommand zcat --outSAMtype BAM Unsorted
   """
@@ -309,21 +312,21 @@ process mapReadsHuman {
 
 process mapReadsVirus {
 
-  
+
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
   file("virus_hisat2_index.*.ht2") from hisat2_index
-  
+
   output:
   set sampName, species, file("*temp.bam") into alignment
-  
+
   """
   hisat2 -x $index -U $reads -p ${task.cpus} |
-  
+
   samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
   """
 
- 
+
 
 // Sort bam
 process sortBam{
@@ -389,8 +392,8 @@ process indexBams {
 Channel
     .from(bamsOut)
     .branch {
-        virus: it  ~/SARS_COV/ 
-        human: it  ~/hg38/ 
+        virus: it  ~/SARS_COV/
+        human: it  ~/hg38/
         }
     .set{bams}
 
@@ -447,68 +450,68 @@ process filterVirus {
 /*
  * Step 4 : Generate gene counts for human and virus reads(unshared)
  */
- 
+
  // First run of StringTie to generate gene counts
  process geneCountHuman {
-  
+
   refGtf = hgtf.join(vgtf)
-  
+
   input:
   set sampID, file(bam) from humanFinal
   file(gtf) from refGtf
-  
+
   output:
   file("${sampID}_human_transcripts.gtf") into humanCounts
   file("${sampID}_human_gene_abun.tab") into humanCounts
-  
+
   """
   stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts.gtf" -G $gtf -A "${sampID}_human_gene_abun.tab"
   """
- } 
-  
+ }
+
  process geneCountVirus {
-  
+
   refGtf = hgtf.join(vgtf)
-  
+
   input:
   set sampID, file(bam) from virusFinal
   file(gtf) from refGtf
-  
+
   output:
   file("${sampID}_virus_transcripts.gtf") into virusCounts
   file("${sampID}_virus_gene_abun.tab") into virusCounts
-  
+
   """
   stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts.gtf" -G $gtf -A "${sampID}_virus_gene_abun.tab"
   """
- } 
+ }
 
  // generating unified transcriptome.
 process humanTrancriptome {
- 
+
  input:
- set sampID, file(gtf) from humanCounts 
+ set sampID, file(gtf) from humanCounts
  file(gtf) from refGtf
- 
+
  output:
  file('stringtie_merged_transcripts.gtf') into humanTranscriptome
  file('assembly_GTF_list.txt') into humanTranscriptome
- 
+
  """
  stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
  """
-} 
+}
 
 process virusTrancriptome {
- 
+
  input:
- set sampID, file(gtf) from virusCounts 
+ set sampID, file(gtf) from virusCounts
  file(gtf) from refGtf
- 
+
  output:
  file('stringtie_merged_transcripts.gtf') into virusTranscriptome
  file('assembly_GTF_list.txt') into virusTranscriptome
- 
+
  """
  stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
  """
@@ -521,27 +524,27 @@ process humanGeneAbundance {
  input:
  set sampID, file(bam) from humanFinal
  file('stringtie_merged_transcripts.gtf') from humanTranscriptome
- 
+
  output:
  file("${sampID}_human_transcripts.gtf") into finalHumanCounts
  file("${sampID}_human_gene_abun.tab") into finalHumanCounts
- 
+
  """
  stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts_filtered.gtf" -eB -G "${sampID}_human_transcripts.gtf" -A "${sampID}_human_gene_abun.tab"
  """
  }
 
- 
+
  process virusGeneAbundance {
 
  input:
  set sampID, file(bam) from virusFinal
  file('stringtie_merged_transcripts.gtf') from virusTranscriptome
- 
+
  output:
  file("${sampID}_virus_transcripts.gtf") into finalVirusCounts
  file("${sampID}_virus_gene_abun.tab") into finalVirusCounts
- 
+
  """
  stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts_filtered.gtf" -eB -G "${sampID}_virus_transcripts.gtf" -A "${sampID}_virus_gene_abun.tab"
  """
