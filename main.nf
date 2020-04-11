@@ -292,23 +292,40 @@ process createHISATIndex {
 process mapReadsHuman {
   
   label 'high_memory'
-  publishDir "${params.outdir}", mode: 'copy',
-      saveAs: {params.saveGenomeIndex ? "reference_genome/STARHuman/${species}/${it}" : null }
   
   input:
   set val(sampName), file(reads) from ch_read_files_fastqc
   file(human_star_index) from star_index
+  file(gtf) from gtfHuman
 
   output:
-  set sampName, species, file("*temp.bam") into STARAligned
+  set sampName, species, file("*temp.bam") into alignment
   file("Log.final.out"),file("*Log.out"),file("*.out"),file("*Log.out"),file("*Log.final.out"),file("*SJ.out.tab")  into STARlog
-  file("*Aligned.sortedByCoord.out.bam.bai")
+  
   
   """
-  bowtie2 -p -x $reads -U $genome -S ${sampName}.${species}.temp.sam
-  samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
+  STAR --genomeDir HumanSTAR --sjdbGTFfile $gtf --readFilesIn $reads --runThreadN ${task.cpus} --twopassMode Basic --readFilesCommand zcat --outSAMtype BAM Unsorted
   """
 }
+
+
+process mapReadsVirus {
+
+  
+  input:
+  set val(sampName), file(reads) from ch_read_files_fastqc
+  file(virus_hisat2_index.*.ht2) from hisat2_index
+  
+  output:
+  set sampName, species, file("*temp.bam") into alignment
+  
+  """
+  hisat2 -x $index -U $reads -p ${task.cpus} |
+  
+  samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
+  """
+
+ 
 
 // Sort bam
 process sortBam{
