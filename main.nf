@@ -200,6 +200,7 @@ process get_software_versions {
     STAR --version > v_star.txt
     HISAT2 --version > v_hisat2.txt
     stringtie --version > v_stringtie.txt
+    sortmerna --version > v_sortmerna.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
@@ -226,6 +227,7 @@ process get_software_versions {
      fastqc --quiet --threads $task.cpus $reads
      """
  }
+
 
 
 /*
@@ -286,6 +288,101 @@ process createHISATIndex {
     """
 }
 
+ /*
+  * STEP 1(b) - SortMeRna (removal of rRNA)
+  */
+
+rRNA_database = file(params.rRNA_database_manifest)
+if (rRNA_database.isEmpty()) {exit 1, "File ${rRNA_database.getName()} is empty!"}
+Channel
+    .from( rRNA_database.readLines() )
+    .map { row -> file(row) }
+    .set { sortmerna_fasta }
+
+
+process sortMeRna_index {
+  label 'low_memory'
+  tag "${fasta.baseName}"
+
+  input:
+  file(fasta) from sortmerna_fasta
+
+  output:
+  val("${fasta.baseName}") into sortmerna_db_name
+  file("$fasta") into sortmerna_db_fasta
+  file("${fasta.baseName}*") into sortmerna_db
+
+        
+  """
+  indexdb_rna --ref $fasta,${fasta.baseName} -m 3072 -v
+  """
+    }
+
+    process sortMeRna_filter {
+        label 'low_memory'
+        tag "$name"
+        publishDir "${params.outdir}/SortMeRNA", mode: 'copy',
+            saveAs: {filename ->
+                if (filename.indexOf("_rRNA_report.txt") > 0) "logs/$filename"
+                else if (params.saveNonRiboRNAReads) "reads/$filename"
+                else null
+            }
+
+        input:
+        set val(sampName), file(reads) from ch_read_files_fastqc
+        val(db_name) from sortmerna_db_name.collect()
+        file(db_fasta) from sortmerna_db_fasta.collect()
+        file(db) from sortmerna_db.collect()
+
+        output:
+        set val(sampName), file("*.fq.gz") into filtered_reads
+        file "*_rRNA_report.txt" into sortmerna_logs
+
+
+        script:
+        //concatenate reference files: ${db_fasta},${db_name}:${db_fasta},${db_name}:...
+        def Refs = ''
+        for (i=0; i<db_fasta.size(); i++) { Refs+= ":${db_fasta[i]},${db_name[i]}" }
+        Refs = Refs.substring(1)
+
+        if (params.singleEnd) {
+            """
+            gzip -d --force < ${reads} > all-reads.fastq
+            sortmerna --ref ${Refs} \
+                --reads all-reads.fastq \
+                --num_alignments 1 \
+                -a ${task.cpus} \
+                --fastx \
+                --aligned rRNA-reads \
+                --other non-rRNA-reads \
+                --log -v
+            gzip --force < non-rRNA-reads.fastq > ${name}.fq.gz
+            mv rRNA-reads.log ${name}_rRNA_report.txt
+            """
+        } else {
+            """
+            gzip -d --force < ${reads[0]} > reads-fw.fq
+            gzip -d --force < ${reads[1]} > reads-rv.fq
+            merge-paired-reads.sh reads-fw.fq reads-rv.fq all-reads.fastq
+            sortmerna --ref ${Refs} \
+                --reads all-reads.fastq \
+                --num_alignments 1 \
+                -a ${task.cpus} \
+                --fastx --paired_in \
+                --aligned rRNA-reads \
+                --other non-rRNA-reads \
+                --log -v
+            unmerge-paired-reads.sh non-rRNA-reads.fastq non-rRNA-reads-fw.fq non-rRNA-reads-rv.fq
+            gzip < non-rRNA-reads-fw.fq > ${name}-fw.fq.gz
+            gzip < non-rRNA-reads-rv.fq > ${name}-rv.fq.gz
+            mv rRNA-reads.log ${name}_rRNA_report.txt
+            """
+        }
+    }
+} 
+   
+   
+
 /*
  * STEP 2(a) - Align across human reference genome (using STAR)
  */
@@ -303,7 +400,7 @@ process mapReadsHuman {
     }
 
   input:
-  set val(sampName), file(reads) from ch_read_files_fastqc
+  set val(sampName), file(reads) from filtered_reads
   file(human_star_index) from star_index
   file(gtf) from gtfHuman
 
@@ -336,7 +433,7 @@ process mapReadsHuman {
 process mapReadsVirus {
 
   input:
-  set val(sampName), file(reads) from ch_read_files_fastqc
+  set val(sampName), file(reads) from filtered_reads
   file("virus_hisat2_index.*.ht2") from hisat2_index
 
   output:
