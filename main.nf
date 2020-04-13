@@ -320,7 +320,7 @@ process createHISATIndex {
 process mapReadsHuman {
 
   label 'high_memory'
-   tag "$sampName"
+  tag "$sampName"
 
   publishDir "${params.outdir}/STAR", mode: 'copy',
     saveAs: {filename ->
