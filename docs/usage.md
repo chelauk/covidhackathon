@@ -153,7 +153,7 @@ There are 31 different species supported in the iGenomes references. To run the 
 You can find the keys to specify the genomes in the [iGenomes config file](../conf/igenomes.config). Common genomes that are supported are:
 
 * Human
-  * `--genome GRCh37`
+  * `--genome GRCh38`
 * Mouse
   * `--genome GRCm38`
 * _Drosophila_
@@ -172,7 +172,7 @@ The syntax for this reference configuration is as follows:
 ```nextflow
 params {
   genomes {
-    'GRCh37' {
+    'GRCh38' {
       fasta   = '<path to the genome fasta file>' // Used if no star index given
     }
     // Any number of additional genomes, key is used with --genome
