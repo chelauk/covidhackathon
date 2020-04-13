@@ -336,7 +336,6 @@ process mapReadsHuman {
 
   output:
   set val(sampName), val(species), file("*.bam") into bamHuman
-  set val(sampName), file("*Log.final.out") into star_aligned
   file "*.out" into alignment_logs
   file "*SJ.out.tab"
   file "*Log.out" into star_log
@@ -425,8 +424,8 @@ process indexBams {
 process makeSharedList {
 
   input:
-  set val(sampName), val(species), file(humanBam), from bamHuman
-  set val(sampName), val(species), file(virusBam), from bamVirus
+  set val(sampName), val(species), file(humanBam) from bamHuman
+  set val(sampName), val(species), file(virusBam) from bamVirus
 
   output:
   file("shared.list") into sharedList
@@ -453,10 +452,10 @@ process filterHuman {
   set val(sampName), file(human) from humanList
 
   output:
-  file("${sampName}"."_human.uniq.bam") into humanFinal
+  file("${sampName}_human.uniq.bam") into humanFinal
 
   """
-  picard FilterSamReads I=$human O="${sampName}""_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
+  picard FilterSamReads I=$human O="${sampName}_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
 
@@ -475,153 +474,153 @@ process filterVirus {
 }
 
 
-/*
- * Step 4 : Generate gene counts for human and virus reads(unshared)
- */
+// /*
+//  * Step 4 : Generate gene counts for human and virus reads(unshared)
+//  */
 
- // First run of StringTie to generate gene counts
- process geneCountHuman {
+//  // First run of StringTie to generate gene counts
+//  process geneCountHuman {
 
-  refGtf = hgtf.join(vgtf)
+//   refGtf = hgtf.join(vgtf)
 
-  input:
-  set sampID, file(bam) from humanFinal
-  file(gtf) from refGtf
+//   input:
+//   set sampID, file(bam) from humanFinal
+//   file(gtf) from refGtf
 
-  output:
-  file("${sampID}_human_transcripts.gtf") into humanCounts
-  file("${sampID}_human_gene_abun.tab") into humanCounts
+//   output:
+//   file("${sampID}_human_transcripts.gtf") into humanCounts
+//   file("${sampID}_human_gene_abun.tab") into humanCounts
 
-  """
-  stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts.gtf" -G $gtf -A "${sampID}_human_gene_abun.tab"
-  """
- }
+//   """
+//   stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts.gtf" -G $gtf -A "${sampID}_human_gene_abun.tab"
+//   """
+//  }
 
- process geneCountVirus {
+//  process geneCountVirus {
 
-  refGtf = hgtf.join(vgtf)
+//   refGtf = hgtf.join(vgtf)
 
-  input:
-  set sampID, file(bam) from virusFinal
-  file(gtf) from refGtf
+//   input:
+//   set sampID, file(bam) from virusFinal
+//   file(gtf) from refGtf
 
-  output:
-  file("${sampID}_virus_transcripts.gtf") into virusCounts
-  file("${sampID}_virus_gene_abun.tab") into virusCounts
+//   output:
+//   file("${sampID}_virus_transcripts.gtf") into virusCounts
+//   file("${sampID}_virus_gene_abun.tab") into virusCounts
 
-  """
-  stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts.gtf" -G $gtf -A "${sampID}_virus_gene_abun.tab"
-  """
- }
+//   """
+//   stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts.gtf" -G $gtf -A "${sampID}_virus_gene_abun.tab"
+//   """
+//  }
 
- // generating unified transcriptome.
-process humanTrancriptome {
+//  // generating unified transcriptome.
+// process humanTrancriptome {
 
- input:
- set sampID, file(gtf) from humanCounts
- file(gtf) from refGtf
+//  input:
+//  set sampID, file(gtf) from humanCounts
+//  file(gtf) from refGtf
 
- output:
- file('stringtie_merged_transcripts.gtf') into humanTranscriptome
- file('assembly_GTF_list.txt') into humanTranscriptome
+//  output:
+//  file('stringtie_merged_transcripts.gtf') into humanTranscriptome
+//  file('assembly_GTF_list.txt') into humanTranscriptome
 
- """
- stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
- """
-}
+//  """
+//  stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
+//  """
+// }
 
-process virusTrancriptome {
+// process virusTrancriptome {
 
- input:
- set sampID, file(gtf) from virusCounts
- file(gtf) from refGtf
+//  input:
+//  set sampID, file(gtf) from virusCounts
+//  file(gtf) from refGtf
 
- output:
- file('stringtie_merged_transcripts.gtf') into virusTranscriptome
- file('assembly_GTF_list.txt') into virusTranscriptome
+//  output:
+//  file('stringtie_merged_transcripts.gtf') into virusTranscriptome
+//  file('assembly_GTF_list.txt') into virusTranscriptome
 
- """
- stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
- """
-}
+//  """
+//  stringtie --merge -o stringtie_merged_transcripts.gtf -G $gtf assembly_GTF_list.txt
+//  """
+// }
 
-// Re-running stringtie on all samples, using merged gtf as reference genome(-g)
+// // Re-running stringtie on all samples, using merged gtf as reference genome(-g)
 
-process humanGeneAbundance {
+// process humanGeneAbundance {
 
- input:
- set sampID, file(bam) from humanFinal
- file('stringtie_merged_transcripts.gtf') from humanTranscriptome
+//  input:
+//  set sampID, file(bam) from humanFinal
+//  file('stringtie_merged_transcripts.gtf') from humanTranscriptome
 
- output:
- file("${sampID}_human_transcripts.gtf") into finalHumanCounts
- file("${sampID}_human_gene_abun.tab") into finalHumanCounts
+//  output:
+//  file("${sampID}_human_transcripts.gtf") into finalHumanCounts
+//  file("${sampID}_human_gene_abun.tab") into finalHumanCounts
 
- """
- stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts_filtered.gtf" -eB -G "${sampID}_human_transcripts.gtf" -A "${sampID}_human_gene_abun.tab"
- """
- }
+//  """
+//  stringtie "${sampID}_human.uniq.bam" -o "${sampID}_human_transcripts_filtered.gtf" -eB -G "${sampID}_human_transcripts.gtf" -A "${sampID}_human_gene_abun.tab"
+//  """
+//  }
 
 
- process virusGeneAbundance {
+//  process virusGeneAbundance {
 
- input:
- set sampID, file(bam) from virusFinal
- file('stringtie_merged_transcripts.gtf') from virusTranscriptome
+//  input:
+//  set sampID, file(bam) from virusFinal
+//  file('stringtie_merged_transcripts.gtf') from virusTranscriptome
 
- output:
- file("${sampID}_virus_transcripts.gtf") into finalVirusCounts
- file("${sampID}_virus_gene_abun.tab") into finalVirusCounts
+//  output:
+//  file("${sampID}_virus_transcripts.gtf") into finalVirusCounts
+//  file("${sampID}_virus_gene_abun.tab") into finalVirusCounts
 
- """
- stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts_filtered.gtf" -eB -G "${sampID}_virus_transcripts.gtf" -A "${sampID}_virus_gene_abun.tab"
- """
-}
+//  """
+//  stringtie "${sampID}_virus.uniq.bam" -o "${sampID}_virus_transcripts_filtered.gtf" -eB -G "${sampID}_virus_transcripts.gtf" -A "${sampID}_virus_gene_abun.tab"
+//  """
+// }
 
-/*
- * STEP 2 - MultiQC
- */
-process multiqc {
-    publishDir "${params.outdir}/MultiQC", mode: 'copy'
+// /*
+//  * STEP 2 - MultiQC
+//  */
+// process multiqc {
+//     publishDir "${params.outdir}/MultiQC", mode: 'copy'
 
-    input:
-    file multiqc_config from ch_multiqc_config
-    // TODO nf-core: Add in log files from your new processes for MultiQC to find!
-    file('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
-    file('software_versions/*') from ch_software_versions_yaml.collect()
-    file workflow_summary from create_workflow_summary(summary)
+//     input:
+//     file multiqc_config from ch_multiqc_config
+//     // TODO nf-core: Add in log files from your new processes for MultiQC to find!
+//     file('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
+//     file('software_versions/*') from ch_software_versions_yaml.collect()
+//     file workflow_summary from create_workflow_summary(summary)
 
-    output:
-    file "*multiqc_report.html" into ch_multiqc_report
-    file "*_data"
-    file "multiqc_plots"
+//     output:
+//     file "*multiqc_report.html" into ch_multiqc_report
+//     file "*_data"
+//     file "multiqc_plots"
 
-    script:
-    rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
-    rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
-    // TODO nf-core: Specify which MultiQC modules to use with -m for a faster run time
-    """
-    multiqc -f $rtitle $rfilename --config $multiqc_config .
-    """
-}
+//     script:
+//     rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
+//     rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
+//     // TODO nf-core: Specify which MultiQC modules to use with -m for a faster run time
+//     """
+//     multiqc -f $rtitle $rfilename --config $multiqc_config .
+//     """
+// }
 
-/*
- * STEP 3 - Output Description HTML
- */
-process output_documentation {
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy'
+// /*
+//  * STEP 3 - Output Description HTML
+//  */
+// process output_documentation {
+//     publishDir "${params.outdir}/pipeline_info", mode: 'copy'
 
-    input:
-    file output_docs from ch_output_docs
+//     input:
+//     file output_docs from ch_output_docs
 
-    output:
-    file "results_description.html"
+//     output:
+//     file "results_description.html"
 
-    script:
-    """
-    markdown_to_html.r $output_docs results_description.html
-    """
-}
+//     script:
+//     """
+//     markdown_to_html.r $output_docs results_description.html
+//     """
+// }
 
 /*
  * Completion e-mail notification
