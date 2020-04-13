@@ -324,8 +324,7 @@ process mapReadsHuman {
 
   publishDir "${params.outdir}/STAR", mode: 'copy',
     saveAs: {filename ->
-        if (filename.indexOf("*.bam") == -1) "logs/$filename"
-        //else if (filename.indexOf("*.bam") > 0) "bam/$filename"
+        if (filename.indexOf(".bam") == -1) "logs/$filename"
         else if (params.saveUnaligned && filename != "where_are_my_files.txt" && 'Unmapped' in filename) "unmapped/$filename"
         else null
     }
@@ -336,7 +335,7 @@ process mapReadsHuman {
   set val(species), file(gtf) from gtfHuman2
 
   output:
-  set val(sampName), val(species), file ("*.bam") into bamHuman
+  set val(sampName), val(species), file("*.bam") into bamHuman
   set val(sampName), file("*Log.final.out") into star_aligned
   file "*.out" into alignment_logs
   file "*SJ.out.tab"
