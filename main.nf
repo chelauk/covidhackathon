@@ -405,7 +405,7 @@ process mapReadsHuman {
   file(gtf) from gtfHuman
 
   output:
-  set val(sampName_, file("*Log.final.out"), file ('*.bam') into star_aligned
+  set val(sampName), file("*Log.final.out"), file ('*.bam') into star_aligned
   file "*.out" into alignment_logs
   file "*SJ.out.tab"
   file "*Log.out" into star_log
