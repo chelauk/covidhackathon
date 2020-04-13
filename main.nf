@@ -32,8 +32,18 @@ def helpMessage() {
       --single_end [bool]             Specifies that the input is single-end reads
 
     References                        If not specified in the configuration file or you wish to overwrite any of the references
-      --fasta [file]                  Path to fasta reference
-      --gtf [file]                    Path to GTF file
+      --fasta [file]                  Path to human fasta reference
+      --gtf [file]                    Path to human GTF file
+      --vfasta [file]                 Path to virus fasta reference
+    
+    STAR options:
+      --saveReference [bool]          Save STAT output: human genome index
+      --saveUnaligned [bool]          Save unaligned reads
+      --star_memory
+
+    HISAT options:
+      --publishDirMode [str]          
+      --saveGenomeIndex [bool]        Save HISAT output: virus genome index
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -78,6 +88,10 @@ if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
 params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
 if (params.gtf) { ch_gtf = file(params.gtf, checkIfExists: true) }
 
+// Virus reference genome
+// TODO Add virus iGenomes parameter
+if (params.vfasta) { ch_vfasta = file(params.vfasta, checkIfExists: true) }
+
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
 custom_runName = params.name
@@ -121,6 +135,12 @@ if (params.readPaths) {
         .fromFilePairs(params.reads, size: params.single_end ? 1 : 2)
         .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nIf this is single-end data, please specify --single_end on the command line." }
         .into { ch_read_files_fastqc; ch_read_files_trimming }
+}
+// Copy channel several times to be used multiple times
+ch_read_files_fastqc.into {
+    ch_read_files_fastqc1
+    ch_read_files_fastqc2
+    ch_read_files_fastqc3
 }
 
 // Header log info
@@ -216,7 +236,7 @@ process get_software_versions {
                  }
 
      input:
-     set val(name), file(reads) from ch_read_files_fastqc
+     set val(name), file(reads) from ch_read_files_fastqc1
 
      output:
      file "*_fastqc.{zip,html}" into ch_fastqc_results
@@ -234,12 +254,18 @@ process get_software_versions {
 
 // create STAR index for human reference genome
 
-fastaRefHuman = Channel.
-              fromPath('${params.fasta}/*.fa')
-fastaRefVirus = Channel.
-              fromPath('${params.fasta}/*.fa')
-gtfHuman = Channel.
-         fromPath('${params.gtf}/*.gtf')
+Channel
+    .fromPath(params.fasta)
+    .map { item -> [ item.baseName, item ]}
+    .set { fastaRefHuman }
+Channel
+    .fromPath(params.gtf)
+    .map { item -> [ item.baseName, item ]}
+    .into { gtfHuman1; gtfHuman2 }
+Channel
+    .fromPath(params.vfasta)
+    .map { item -> [ item.baseName, item ]}
+    .set { fastaRefVirus }
 
 process createSTARIndex {
     label 'high_memory'
@@ -249,11 +275,11 @@ process createSTARIndex {
         saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
     input:
-    file fasta from fastaRefHuman
-    file gtf from gtfHuman
+    set val(species), file(fasta) from fastaRefHuman
+    set val(species), file(gtf) from gtfHuman1
 
     output:
-    file "HumanSTAR" into star_index
+    file("HumanSTAR") into star_index
 
     script:
     def avail_mem = task.memory ? "--limitGenomeGenerateRAM ${task.memory.toBytes() - 100000000}" : ''
@@ -276,13 +302,14 @@ process createHISATIndex {
         saveAs: {params.saveGenomeIndex ? "reference_genome/hisat2Index/${species}/${it}" : null }
 
     input:
-    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefVirus
+    set val(species), file(fasta) from fastaRefVirus
 
     output:
-    file("virus_hisat2_index.*.ht2") into hisat2_index
+    set val(species), file("${species}.*.ht2") into hisat2_index
 
+    script: 
     """
-    hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
+    hisat2-build -p ${task.cpus} $fasta $species
     """
 }
 
@@ -293,67 +320,97 @@ process createHISATIndex {
 process mapReadsHuman {
 
   label 'high_memory'
+   tag "$sampName"
+
+  publishDir "${params.outdir}/STAR", mode: 'copy',
+    saveAs: {filename ->
+        if (filename.indexOf("*.bam") == -1) "logs/$filename"
+        //else if (filename.indexOf("*.bam") > 0) "bam/$filename"
+        else if (params.saveUnaligned && filename != "where_are_my_files.txt" && 'Unmapped' in filename) "unmapped/$filename"
+        else null
+    }
 
   input:
-  set val(sampName), file(reads) from ch_read_files_fastqc
+  set val(sampName), file(reads) from ch_read_files_fastqc2
   file(human_star_index) from star_index
-  file(gtf) from gtfHuman
+  set val(species), file(gtf) from gtfHuman2
 
   output:
-  set sampName, species, file("*temp.bam") into alignment
-  file("Log.final.out"),file("*Log.out"),file("*.out"),file("*Log.out"),file("*Log.final.out"),file("*SJ.out.tab")  into STARlog
+  set val(sampName), val(species), file ("*.bam") into bamHuman
+  set val(sampName), file("*Log.final.out") into star_aligned
+  file "*.out" into alignment_logs
+  file "*SJ.out.tab"
+  file "*Log.out" into star_log
+  file "*Unmapped*" optional true
+  //file "${prefix}Aligned.sortedByCoord.out.bam.bai" into bam_index_rseqc, bam_index_genebody
+  // No <.bam.bai> file is created
 
-
+  script:
+  def star_mem = task.memory ?: params.star_memory ?: false
+  def avail_mem = star_mem ? "--limitBAMsortRAM ${star_mem.toBytes() - 100000000}" : ''
+  unaligned = params.saveUnaligned ? "--outReadsUnmapped Fastx" : ''
   """
-  STAR --genomeDir HumanSTAR --sjdbGTFfile $gtf --readFilesIn $reads --runThreadN ${task.cpus} --twopassMode Basic --readFilesCommand zcat --outSAMtype BAM Unsorted
+  STAR \\
+  --genomeDir HumanSTAR \\
+  --sjdbGTFfile $gtf \\
+  --readFilesIn $reads \\
+  --runThreadN ${task.cpus} \\
+  --twopassMode Basic \\
+  --readFilesCommand zcat \\
+  --outSAMtype BAM SortedByCoordinate $avail_mem \\
+  --outFileNamePrefix $sampName
   """
 }
 
 
 process mapReadsVirus {
 
-
   input:
-  set val(sampName), file(reads) from ch_read_files_fastqc
-  file("virus_hisat2_index.*.ht2") from hisat2_index
+  set val(sampName), file(reads) from ch_read_files_fastqc3
+  set val(species), file(index) from hisat2_index
 
   output:
-  set sampName, species, file("*temp.bam") into alignment
+  set sampName, species, file("${sampName}.${species}.temp.bam") into alignment
 
+  script:
   """
-  hisat2 -x $index -U $reads -p ${task.cpus} |
+  hisat2 -x $species -U $reads -p ${task.cpus} -S ${sampName}.${species}.temp.sam
 
   samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
   """
 
-
+}
 
 // Sort bam
 process sortBam{
 
   input:
-  set sampName, species, file(tmp) from alignment
+  set val(sampName), val(species), file(tmp) from alignment
 
   output:
-  file("${sampName}"."${species}".bam) into bamSort
+  set val(sampName), \
+  val(species), \
+  file("${sampName}.${species}.bam") into bamSort
 
+  script:
   """
-  samtools sort -o "${sampName}"."${species}".bam $tmp
+  samtools sort $tmp ${sampName}.${species}
   """
 }
 
 // Index bam
 process indexBams {
 
-  publishDir "results/alignments", mode: 'copy'
+  publishDir "${params.outdir}/alignments", mode: 'copy'
 
   input:
-  set sampNames, species, file(bam) from bamsort
+  set val(sampName), val(species), file(bam) from bamSort
 
   output:
   file("${bam}.bai") into bamsidx
-  file("${bam}") into bamsout
+  file("${bam}") into bamVirus
 
+  script:
   """
   samtools index -b $bam
   """
@@ -362,48 +419,15 @@ process indexBams {
 /*
  * Step 3 : Identify common reads mapped to both viral and human reference genome
  *
- * The branch operator allows you to forward the items emitted by a source
- * channel to one or more output channels, choosing one out of them at a time.
- *
- * The selection criteria is defined by specifying a closure that provides one
- * or more boolean expression, each of which is identified by a unique label.
- * On the first expression that evaluates to a true value, the current item is
- * bound to a named channel as the label identifier. For example:
- *
- * Channel
- *    .from(1,2,3,40,50)
- *    .branch {
- *        small: it < 10
- *        large: it > 10
- *    }
- *    .set { result }
- *  result.small.view { "$it is small" }
- *  result.large.view { "$it is large" }
- *
- * it shows
- * 1 is small
- * 2 is small
- * 3 is small
- * 40 is large
- * 50 is large
- *
- */
+*/
+ 
 
-Channel
-    .from(bamsOut)
-    .branch {
-        virus: it  ~/SARS_COV/
-        human: it  ~/hg38/
-        }
-    .set{bams}
-
-// bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
 
 process makeSharedList {
 
   input:
-  set val(sampName), val(species), file(humanBam), from bams.human
-  set val(sampName), val(species), file(virusBam), from bams.virus
+  set val(sampName), val(species), file(humanBam), from bamHuman
+  set val(sampName), val(species), file(virusBam), from bamVirus
 
   output:
   file("shared.list") into sharedList
@@ -418,11 +442,16 @@ process makeSharedList {
   """
 }
 
+sharedList.into {
+     sharedList1
+     sharedList2
+}
+
 process filterHuman {
 
   input:
-  file(sharedReads) from sharedList
-  set sampName, file(human) from humanList
+  file(sharedReads) from sharedList1
+  set val(sampName), file(human) from humanList
 
   output:
   file("${sampName}"."_human.uniq.bam") into humanFinal
@@ -435,7 +464,7 @@ process filterHuman {
 process filterVirus {
 
   input:
-  file(sharedReads) from shareList
+  file(sharedReads) from sharedList2
   set sampName, file(virus) from virusList
 
   output:
@@ -550,165 +579,165 @@ process humanGeneAbundance {
  """
 }
 
-/*
- * STEP 2 - MultiQC
- */
-process multiqc {
-    publishDir "${params.outdir}/MultiQC", mode: 'copy'
+// /*
+//  * STEP 2 - MultiQC
+//  */
+// process multiqc {
+//     publishDir "${params.outdir}/MultiQC", mode: 'copy'
 
-    input:
-    file multiqc_config from ch_multiqc_config
-    // TODO nf-core: Add in log files from your new processes for MultiQC to find!
-    file ('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
-    file ('software_versions/*') from ch_software_versions_yaml.collect()
-    file workflow_summary from create_workflow_summary(summary)
+//     input:
+//     file multiqc_config from ch_multiqc_config
+//     // TODO nf-core: Add in log files from your new processes for MultiQC to find!
+//     file ('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
+//     file ('software_versions/*') from ch_software_versions_yaml.collect()
+//     file workflow_summary from create_workflow_summary(summary)
 
-    output:
-    file "*multiqc_report.html" into ch_multiqc_report
-    file "*_data"
-    file "multiqc_plots"
+//     output:
+//     file "*multiqc_report.html" into ch_multiqc_report
+//     file "*_data"
+//     file "multiqc_plots"
 
-    script:
-    rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
-    rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
-    // TODO nf-core: Specify which MultiQC modules to use with -m for a faster run time
-    """
-    multiqc -f $rtitle $rfilename --config $multiqc_config .
-    """
-}
+//     script:
+//     rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
+//     rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
+//     // TODO nf-core: Specify which MultiQC modules to use with -m for a faster run time
+//     """
+//     multiqc -f $rtitle $rfilename --config $multiqc_config .
+//     """
+// }
 
-/*
- * STEP 3 - Output Description HTML
- */
-process output_documentation {
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy'
+// /*
+//  * STEP 3 - Output Description HTML
+//  */
+// process output_documentation {
+//     publishDir "${params.outdir}/pipeline_info", mode: 'copy'
 
-    input:
-    file output_docs from ch_output_docs
+//     input:
+//     file output_docs from ch_output_docs
 
-    output:
-    file "results_description.html"
+//     output:
+//     file "results_description.html"
 
-    script:
-    """
-    markdown_to_html.r $output_docs results_description.html
-    """
-}
+//     script:
+//     """
+//     markdown_to_html.r $output_docs results_description.html
+//     """
+// }
 
-/*
- * Completion e-mail notification
- */
-workflow.onComplete {
+// /*
+//  * Completion e-mail notification
+//  */
+// workflow.onComplete {
 
-    // Set up the e-mail variables
-    def subject = "[nf-core/covidhackathon] Successful: $workflow.runName"
-    if (!workflow.success) {
-        subject = "[nf-core/covidhackathon] FAILED: $workflow.runName"
-    }
-    def email_fields = [:]
-    email_fields['version'] = workflow.manifest.version
-    email_fields['runName'] = custom_runName ?: workflow.runName
-    email_fields['success'] = workflow.success
-    email_fields['dateComplete'] = workflow.complete
-    email_fields['duration'] = workflow.duration
-    email_fields['exitStatus'] = workflow.exitStatus
-    email_fields['errorMessage'] = (workflow.errorMessage ?: 'None')
-    email_fields['errorReport'] = (workflow.errorReport ?: 'None')
-    email_fields['commandLine'] = workflow.commandLine
-    email_fields['projectDir'] = workflow.projectDir
-    email_fields['summary'] = summary
-    email_fields['summary']['Date Started'] = workflow.start
-    email_fields['summary']['Date Completed'] = workflow.complete
-    email_fields['summary']['Pipeline script file path'] = workflow.scriptFile
-    email_fields['summary']['Pipeline script hash ID'] = workflow.scriptId
-    if (workflow.repository) email_fields['summary']['Pipeline repository Git URL'] = workflow.repository
-    if (workflow.commitId) email_fields['summary']['Pipeline repository Git Commit'] = workflow.commitId
-    if (workflow.revision) email_fields['summary']['Pipeline Git branch/tag'] = workflow.revision
-    email_fields['summary']['Nextflow Version'] = workflow.nextflow.version
-    email_fields['summary']['Nextflow Build'] = workflow.nextflow.build
-    email_fields['summary']['Nextflow Compile Timestamp'] = workflow.nextflow.timestamp
+//     // Set up the e-mail variables
+//     def subject = "[nf-core/covidhackathon] Successful: $workflow.runName"
+//     if (!workflow.success) {
+//         subject = "[nf-core/covidhackathon] FAILED: $workflow.runName"
+//     }
+//     def email_fields = [:]
+//     email_fields['version'] = workflow.manifest.version
+//     email_fields['runName'] = custom_runName ?: workflow.runName
+//     email_fields['success'] = workflow.success
+//     email_fields['dateComplete'] = workflow.complete
+//     email_fields['duration'] = workflow.duration
+//     email_fields['exitStatus'] = workflow.exitStatus
+//     email_fields['errorMessage'] = (workflow.errorMessage ?: 'None')
+//     email_fields['errorReport'] = (workflow.errorReport ?: 'None')
+//     email_fields['commandLine'] = workflow.commandLine
+//     email_fields['projectDir'] = workflow.projectDir
+//     email_fields['summary'] = summary
+//     email_fields['summary']['Date Started'] = workflow.start
+//     email_fields['summary']['Date Completed'] = workflow.complete
+//     email_fields['summary']['Pipeline script file path'] = workflow.scriptFile
+//     email_fields['summary']['Pipeline script hash ID'] = workflow.scriptId
+//     if (workflow.repository) email_fields['summary']['Pipeline repository Git URL'] = workflow.repository
+//     if (workflow.commitId) email_fields['summary']['Pipeline repository Git Commit'] = workflow.commitId
+//     if (workflow.revision) email_fields['summary']['Pipeline Git branch/tag'] = workflow.revision
+//     email_fields['summary']['Nextflow Version'] = workflow.nextflow.version
+//     email_fields['summary']['Nextflow Build'] = workflow.nextflow.build
+//     email_fields['summary']['Nextflow Compile Timestamp'] = workflow.nextflow.timestamp
 
-    // TODO nf-core: If not using MultiQC, strip out this code (including params.max_multiqc_email_size)
-    // On success try attach the multiqc report
-    def mqc_report = null
-    try {
-        if (workflow.success) {
-            mqc_report = ch_multiqc_report.getVal()
-            if (mqc_report.getClass() == ArrayList) {
-                log.warn "[nf-core/covidhackathon] Found multiple reports from process 'multiqc', will use only one"
-                mqc_report = mqc_report[0]
-            }
-        }
-    } catch (all) {
-        log.warn "[nf-core/covidhackathon] Could not attach MultiQC report to summary email"
-    }
+//     // TODO nf-core: If not using MultiQC, strip out this code (including params.max_multiqc_email_size)
+//     // On success try attach the multiqc report
+//     def mqc_report = null
+//     try {
+//         if (workflow.success) {
+//             mqc_report = ch_multiqc_report.getVal()
+//             if (mqc_report.getClass() == ArrayList) {
+//                 log.warn "[nf-core/covidhackathon] Found multiple reports from process 'multiqc', will use only one"
+//                 mqc_report = mqc_report[0]
+//             }
+//         }
+//     } catch (all) {
+//         log.warn "[nf-core/covidhackathon] Could not attach MultiQC report to summary email"
+//     }
 
-    // Check if we are only sending emails on failure
-    email_address = params.email
-    if (!params.email && params.email_on_fail && !workflow.success) {
-        email_address = params.email_on_fail
-    }
+//     // Check if we are only sending emails on failure
+//     email_address = params.email
+//     if (!params.email && params.email_on_fail && !workflow.success) {
+//         email_address = params.email_on_fail
+//     }
 
-    // Render the TXT template
-    def engine = new groovy.text.GStringTemplateEngine()
-    def tf = new File("$baseDir/assets/email_template.txt")
-    def txt_template = engine.createTemplate(tf).make(email_fields)
-    def email_txt = txt_template.toString()
+//     // Render the TXT template
+//     def engine = new groovy.text.GStringTemplateEngine()
+//     def tf = new File("$baseDir/assets/email_template.txt")
+//     def txt_template = engine.createTemplate(tf).make(email_fields)
+//     def email_txt = txt_template.toString()
 
-    // Render the HTML template
-    def hf = new File("$baseDir/assets/email_template.html")
-    def html_template = engine.createTemplate(hf).make(email_fields)
-    def email_html = html_template.toString()
+//     // Render the HTML template
+//     def hf = new File("$baseDir/assets/email_template.html")
+//     def html_template = engine.createTemplate(hf).make(email_fields)
+//     def email_html = html_template.toString()
 
-    // Render the sendmail template
-    def smail_fields = [ email: email_address, subject: subject, email_txt: email_txt, email_html: email_html, baseDir: "$baseDir", mqcFile: mqc_report, mqcMaxSize: params.max_multiqc_email_size.toBytes() ]
-    def sf = new File("$baseDir/assets/sendmail_template.txt")
-    def sendmail_template = engine.createTemplate(sf).make(smail_fields)
-    def sendmail_html = sendmail_template.toString()
+//     // Render the sendmail template
+//     def smail_fields = [ email: email_address, subject: subject, email_txt: email_txt, email_html: email_html, baseDir: "$baseDir", mqcFile: mqc_report, mqcMaxSize: params.max_multiqc_email_size.toBytes() ]
+//     def sf = new File("$baseDir/assets/sendmail_template.txt")
+//     def sendmail_template = engine.createTemplate(sf).make(smail_fields)
+//     def sendmail_html = sendmail_template.toString()
 
-    // Send the HTML e-mail
-    if (email_address) {
-        try {
-            if (params.plaintext_email) { throw GroovyException('Send plaintext e-mail, not HTML') }
-            // Try to send HTML e-mail using sendmail
-            [ 'sendmail', '-t' ].execute() << sendmail_html
-            log.info "[nf-core/covidhackathon] Sent summary e-mail to $email_address (sendmail)"
-        } catch (all) {
-            // Catch failures and try with plaintext
-            [ 'mail', '-s', subject, email_address ].execute() << email_txt
-            log.info "[nf-core/covidhackathon] Sent summary e-mail to $email_address (mail)"
-        }
-    }
+//     // Send the HTML e-mail
+//     if (email_address) {
+//         try {
+//             if (params.plaintext_email) { throw GroovyException('Send plaintext e-mail, not HTML') }
+//             // Try to send HTML e-mail using sendmail
+//             [ 'sendmail', '-t' ].execute() << sendmail_html
+//             log.info "[nf-core/covidhackathon] Sent summary e-mail to $email_address (sendmail)"
+//         } catch (all) {
+//             // Catch failures and try with plaintext
+//             [ 'mail', '-s', subject, email_address ].execute() << email_txt
+//             log.info "[nf-core/covidhackathon] Sent summary e-mail to $email_address (mail)"
+//         }
+//     }
 
-    // Write summary e-mail HTML to a file
-    def output_d = new File("${params.outdir}/pipeline_info/")
-    if (!output_d.exists()) {
-        output_d.mkdirs()
-    }
-    def output_hf = new File(output_d, "pipeline_report.html")
-    output_hf.withWriter { w -> w << email_html }
-    def output_tf = new File(output_d, "pipeline_report.txt")
-    output_tf.withWriter { w -> w << email_txt }
+//     // Write summary e-mail HTML to a file
+//     def output_d = new File("${params.outdir}/pipeline_info/")
+//     if (!output_d.exists()) {
+//         output_d.mkdirs()
+//     }
+//     def output_hf = new File(output_d, "pipeline_report.html")
+//     output_hf.withWriter { w -> w << email_html }
+//     def output_tf = new File(output_d, "pipeline_report.txt")
+//     output_tf.withWriter { w -> w << email_txt }
 
-    c_green = params.monochrome_logs ? '' : "\033[0;32m";
-    c_purple = params.monochrome_logs ? '' : "\033[0;35m";
-    c_red = params.monochrome_logs ? '' : "\033[0;31m";
-    c_reset = params.monochrome_logs ? '' : "\033[0m";
+//     c_green = params.monochrome_logs ? '' : "\033[0;32m";
+//     c_purple = params.monochrome_logs ? '' : "\033[0;35m";
+//     c_red = params.monochrome_logs ? '' : "\033[0;31m";
+//     c_reset = params.monochrome_logs ? '' : "\033[0m";
 
-    if (workflow.stats.ignoredCount > 0 && workflow.success) {
-        log.info "-${c_purple}Warning, pipeline completed, but with errored process(es) ${c_reset}-"
-        log.info "-${c_red}Number of ignored errored process(es) : ${workflow.stats.ignoredCount} ${c_reset}-"
-        log.info "-${c_green}Number of successfully ran process(es) : ${workflow.stats.succeedCount} ${c_reset}-"
-    }
+//     if (workflow.stats.ignoredCount > 0 && workflow.success) {
+//         log.info "-${c_purple}Warning, pipeline completed, but with errored process(es) ${c_reset}-"
+//         log.info "-${c_red}Number of ignored errored process(es) : ${workflow.stats.ignoredCount} ${c_reset}-"
+//         log.info "-${c_green}Number of successfully ran process(es) : ${workflow.stats.succeedCount} ${c_reset}-"
+//     }
 
-    if (workflow.success) {
-        log.info "-${c_purple}[nf-core/covidhackathon]${c_green} Pipeline completed successfully${c_reset}-"
-    } else {
-        checkHostname()
-        log.info "-${c_purple}[nf-core/covidhackathon]${c_red} Pipeline completed with errors${c_reset}-"
-    }
+//     if (workflow.success) {
+//         log.info "-${c_purple}[nf-core/covidhackathon]${c_green} Pipeline completed successfully${c_reset}-"
+//     } else {
+//         checkHostname()
+//         log.info "-${c_purple}[nf-core/covidhackathon]${c_red} Pipeline completed with errors${c_reset}-"
+//     }
 
-}
+// }
 
 
 def nfcoreHeader() {
