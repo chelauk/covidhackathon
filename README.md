@@ -33,7 +33,7 @@ iv. Start running your own analysis!
 <!-- TODO nf-core: Update the default command above used to run the pipeline -->
 
 ```bash
-nextflow run nf-core/covidhackathon -profile <docker/singularity/conda/institute> --reads '*_R{1,2}.fastq.gz' --genome GRCh37
+nextflow run nf-core/covidhackathon -profile <docker/singularity/conda/institute> --reads '*_R{1,2}.fastq.gz' --genome GRCh38
 ```
 
 See [usage docs](docs/usage.md) for all of the available options when running the pipeline.
