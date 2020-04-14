@@ -35,7 +35,7 @@ def helpMessage() {
       --star_index                    Path to STAR index
       --fasta                         Path to genome fasta file
       --gtf                           Path to GTF file
-     
+      --rRNA_db                       Path to file that contains file paths for rRNA databases (optional)
       
 
     Other options:
