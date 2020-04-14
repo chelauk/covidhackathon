@@ -17,6 +17,7 @@ dependencies:
   - bioconda::htslib=1.10.2
   - bioconda::picard=2.22.2
   - bioconda::samtools=0.1.19
+  - bioconda::sortmerna=2.1b
   - bioconda::STAR=2.7.3a
   - bioconda::stringtie=2.1.1
   - bioconda::multiqc=1.8
