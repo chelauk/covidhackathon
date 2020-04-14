@@ -238,7 +238,7 @@ process get_software_versions {
  * create indices
  */
 
-// create STAR index for human reference genome
+// create STAR index for human reference genome in case it is absent
 
 fastaRefHuman = Channel.
               fromPath('${params.fasta}/*.fa')
@@ -247,32 +247,33 @@ fastaRefVirus = Channel.
 gtfHuman = Channel.
          fromPath('${params.gtf}/*.gtf')
 
-process createSTARIndex {
-    label 'high_memory'
-    tag "$fasta"
+if (!params.star_index && params.fasta) {
+    process createSTARIndex {
+      label 'high_memory'
+      tag "$fasta"
 
-    publishDir path: { params.saveReference ? "${params.outdir}/reference_genome" : params.outdir },
+      publishDir path: { params.saveReference ? "${params.outdir}/star_idx/reference_genome" : params.outdir },
         saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
-    input:
-    file fasta from fastaRefHuman
-    file gtf from gtfHuman
+      input:
+      file fasta from fastaRefHuman
+      file gtf from gtfHuman
 
-    output:
-    file "HumanSTAR" into star_index
+      output:
+      file "star" into star_index
 
-    script:
-    def avail_mem = task.memory ? "--limitGenomeGenerateRAM ${task.memory.toBytes() - 100000000}" : ''
-    """
-    mkdir HumanSTAR
-    STAR \\
-    --runMode genomeGenerate \\
-    --runThreadN ${task.cpus} \\
-    --sjdbGTFfile $gtf \\
-    --genomeDir HumanSTAR \\
-    --genomeFastaFiles $fasta \\
-    $avail_mem
-    """
+      script:
+      def avail_mem = task.memory ? "--limitGenomeGenerateRAM ${task.memory.toBytes() - 100000000}" : ''
+      """
+      mkdir HumanSTAR
+      STAR \\
+      --runMode genomeGenerate \\
+      --runThreadN ${task.cpus} \\
+      --sjdbGTFfile $gtf \\
+      --genomeDir HumanSTAR \\
+      --genomeFastaFiles $fasta \\
+      $avail_mem
+      """
 }
 
 process createHISATIndex {
@@ -296,7 +297,9 @@ process createHISATIndex {
   * STEP 1(b) - SortMeRna (removal of rRNA)
   */
 
-rRNA_database = file(params.rRNA_database_manifest)
+
+// fetching rRNA databases, the default being 'assets/rRna_data.txt'
+rRNA_database = file(params.rRNA_db)
 if (rRNA_database.isEmpty()) {exit 1, "File ${rRNA_database.getName()} is empty!"}
 Channel
     .from( rRNA_database.readLines() )
@@ -306,29 +309,29 @@ Channel
 
 process sortMeRna_index {
   label 'low_memory'
-  tag "${fasta.baseName}"
+  tag "${fasta.human}"
 
   input:
   file(fasta) from sortmerna_fasta
 
   output:
-  val("${fasta.baseName}") into sortmerna_db_name
+  val("${fasta.human}") into sortmerna_db_name
   file("$fasta") into sortmerna_db_fasta
-  file("${fasta.baseName}*") into sortmerna_db
+  file("${fasta.human}*") into sortmerna_db
 
         
   """
-  indexdb_rna --ref $fasta,${fasta.baseName} -m 3072 -v
+  indexdb_rna --ref $fasta,${fasta.human} -m 3072 -v
   """
     }
 
     process sortMeRna_filter {
         label 'low_memory'
-        tag "$name"
+        tag "$sampName"
         publishDir "${params.outdir}/SortMeRNA", mode: 'copy',
             saveAs: {filename ->
-                if (filename.indexOf("_rRNA_report.txt") > 0) "logs/$filename"
-                else if (params.saveNonRiboRNAReads) "reads/$filename"
+                if (filename.indexOf("_rRNA_report.txt") > 0) "logs/$sampName"
+                else if (params.saveNonRiboRNAReads) "reads/$sampName"
                 else null
             }
 
@@ -344,13 +347,14 @@ process sortMeRna_index {
 
 
         script:
-        //concatenate reference files: ${db_fasta},${db_name}:${db_fasta},${db_name}:...
+        //combine files ${db_fasta} and ${db_name}
         def Refs = ''
         for (i=0; i<db_fasta.size(); i++) { Refs+= ":${db_fasta[i]},${db_name[i]}" }
         Refs = Refs.substring(1)
 
         if (params.singleEnd) {
             """
+            // grouping all reads together for the next step
             gzip -d --force < ${reads} > all-reads.fastq
             sortmerna --ref ${Refs} \
                 --reads all-reads.fastq \
@@ -360,8 +364,8 @@ process sortMeRna_index {
                 --aligned rRNA-reads \
                 --other non-rRNA-reads \
                 --log -v
-            gzip --force < non-rRNA-reads.fastq > ${name}.fq.gz
-            mv rRNA-reads.log ${name}_rRNA_report.txt
+            gzip --force < non-rRNA-reads.fastq > ${sampName}.fq.gz
+            mv rRNA-reads.log ${sampName}_rRNA_report.txt
             """
         } else {
             """
@@ -377,9 +381,9 @@ process sortMeRna_index {
                 --other non-rRNA-reads \
                 --log -v
             unmerge-paired-reads.sh non-rRNA-reads.fastq non-rRNA-reads-fw.fq non-rRNA-reads-rv.fq
-            gzip < non-rRNA-reads-fw.fq > ${name}-fw.fq.gz
-            gzip < non-rRNA-reads-rv.fq > ${name}-rv.fq.gz
-            mv rRNA-reads.log ${name}_rRNA_report.txt
+            gzip < non-rRNA-reads-fw.fq > ${sampName}-fw.fq.gz
+            gzip < non-rRNA-reads-rv.fq > ${sampName}-rv.fq.gz
+            mv rRNA-reads.log ${sampName}_rRNA_report.txt
             """
         }
     }
@@ -405,7 +409,7 @@ process mapReadsHuman {
 
   input:
   set val(sampName), file(reads) from filtered_reads
-  file(human_star_index) from star_index
+  file("star") from star_index
   file(gtf) from gtfHuman
 
   output:
