@@ -242,9 +242,9 @@ process get_software_versions {
 // create STAR index for human reference genome in case it is absent
 
 fastaRefHuman = Channel.
-              fromPath('${params.fasta}/*.fa')
+              fromPath('${params.hfasta}/*.fa')
 fastaRefVirus = Channel.
-              fromPath('${params.fasta}/*.fa')
+              fromPath('${params.vfasta}/*.fa')
 gtfHuman = Channel.
          fromPath('${params.gtf}/*.gtf')
 
@@ -253,7 +253,7 @@ if (!params.star_index && params.fasta) {
       label 'high_memory'
       tag "$fasta"
 
-      publishDir path: { params.saveReference ? "${params.outdir}/star_idx/reference_genome" : params.outdir },
+      publishDir path: { params.saveReference ? "${params.hfasta}/" },
         saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
       input:
@@ -280,11 +280,11 @@ if (!params.star_index && params.fasta) {
 process createHISATIndex {
     tag {reference}
 
-    publishDir params.outdir, mode: params.publishDirMode,
-        saveAs: {params.saveGenomeIndex ? "reference_genome/hisat2Index/${species}/${it}" : null }
+    publishDir path: { params.saveReference ? "${params.vfasta}/" },
+      saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
     input:
-    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefVirus
+    file(fasta) from fastaRefVirus
 
     output:
     file("virus_hisat2_index.*.ht2") into hisat2_index
