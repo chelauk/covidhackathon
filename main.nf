@@ -13,7 +13,7 @@ def helpMessage() {
     // TODO nf-core: Add to this help message with new command line parameters
     log.info nfcoreHeader()
     log.info"""
-    This pipeline aligns viral sequences to human and viral references
+    This pipeline aligns human rna sequences to human and viral references and 
     discards reads common to both
 
     Usage:
@@ -31,9 +31,12 @@ def helpMessage() {
       --genome [str]                  Name of iGenomes reference
       --single_end [bool]             Specifies that the input is single-end reads
 
-    References                        If not specified in the configuration file or you wish to overwrite any of the references
-      --fasta [file]                  Path to fasta reference
-      --gtf [file]                    Path to GTF file
+    References:                      If not specified in the configuration file or you wish to overwrite any of the references
+      --star_index                    Path to STAR index
+      --fasta                         Path to genome fasta file
+      --gtf                           Path to GTF file
+     
+      
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -64,6 +67,12 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
     exit 1, "The provided genome '${params.genome}' is not available in the iGenomes file. Currently the available genomes are ${params.genomes.keySet().join(", ")}"
 }
 
+// Define path to reference files
+params.star_index = params.genome ? params.genomes[ params.genome ].star ?: false : false
+params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
+params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
+
+
 // TODO nf-core: Add any reference files that are needed
 // Configurable reference genomes
 //
@@ -71,12 +80,7 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 // If you want to use the channel below in a process, define the following:
 //   input:
 //   file fasta from ch_fasta
-//
-params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
 
-params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
-if (params.gtf) { ch_gtf = file(params.gtf, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
