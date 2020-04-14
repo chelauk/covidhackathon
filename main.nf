@@ -13,7 +13,7 @@ def helpMessage() {
     // TODO nf-core: Add to this help message with new command line parameters
     log.info nfcoreHeader()
     log.info"""
-    This pipeline aligns human rna sequences to human and viral references and 
+    This pipeline aligns human rna sequences to human and viral references and
     discards reads common to both
 
     Usage:
@@ -32,11 +32,11 @@ def helpMessage() {
       --single_end [bool]             Specifies that the input is single-end reads
 
     References:                      If not specified in the configuration file or you wish to overwrite any of the references
-      --star_index                    Path to STAR index
-      --fasta                         Path to genome fasta file
-      --gtf                           Path to GTF file
+      --hfasta                        Path to human genome fasta file
+      --vfasta                        Path to virus genome fasta file
+      --gtf                           Path to human GTF file
       --rRNA_db                       Path to file that contains file paths for rRNA databases (optional)
-      
+
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -134,7 +134,8 @@ if (workflow.revision) summary['Pipeline Release'] = workflow.revision
 summary['Run Name']         = custom_runName ?: workflow.runName
 // TODO nf-core: Report custom parameters here
 summary['Reads']            = params.reads
-summary['Fasta Ref']        = params.fasta
+summary['Human Ref']        = params.hfasta
+summary['Virus Ref']        = params.vfasta
 summary['Data Type']        = params.single_end ? 'Single-End' : 'Paired-End'
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
@@ -319,7 +320,7 @@ process sortMeRna_index {
   file("$fasta") into sortmerna_db_fasta
   file("${fasta.human}*") into sortmerna_db
 
-        
+
   """
   indexdb_rna --ref $fasta,${fasta.human} -m 3072 -v
   """
@@ -387,9 +388,9 @@ process sortMeRna_index {
             """
         }
     }
-} 
-   
-   
+}
+
+
 
 /*
  * STEP 2(a) - Align across human reference genome (using STAR)
