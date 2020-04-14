@@ -13,7 +13,7 @@ def helpMessage() {
     // TODO nf-core: Add to this help message with new command line parameters
     log.info nfcoreHeader()
     log.info"""
-    This pipeline aligns viral sequences to human and viral references
+    This pipeline aligns human rna sequences to human and viral references and 
     discards reads common to both
 
     Usage:
@@ -31,9 +31,12 @@ def helpMessage() {
       --genome [str]                  Name of iGenomes reference
       --single_end [bool]             Specifies that the input is single-end reads
 
-    References                        If not specified in the configuration file or you wish to overwrite any of the references
-      --fasta [file]                  Path to fasta reference
-      --gtf [file]                    Path to GTF file
+    References:                      If not specified in the configuration file or you wish to overwrite any of the references
+      --star_index                    Path to STAR index
+      --fasta                         Path to genome fasta file
+      --gtf                           Path to GTF file
+      --rRNA_db                       Path to file that contains file paths for rRNA databases (optional)
+      
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -64,6 +67,12 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
     exit 1, "The provided genome '${params.genome}' is not available in the iGenomes file. Currently the available genomes are ${params.genomes.keySet().join(", ")}"
 }
 
+// Define path to reference files
+params.star_index = params.genome ? params.genomes[ params.genome ].star ?: false : false
+params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
+params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
+
+
 // TODO nf-core: Add any reference files that are needed
 // Configurable reference genomes
 //
@@ -71,12 +80,7 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 // If you want to use the channel below in a process, define the following:
 //   input:
 //   file fasta from ch_fasta
-//
-params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
 
-params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : false
-if (params.gtf) { ch_gtf = file(params.gtf, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -200,6 +204,7 @@ process get_software_versions {
     STAR --version > v_star.txt
     HISAT2 --version > v_hisat2.txt
     stringtie --version > v_stringtie.txt
+    sortmerna --version > v_sortmerna.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
@@ -228,11 +233,12 @@ process get_software_versions {
  }
 
 
+
 /*
  * create indices
  */
 
-// create STAR index for human reference genome
+// create STAR index for human reference genome in case it is absent
 
 fastaRefHuman = Channel.
               fromPath('${params.fasta}/*.fa')
@@ -241,32 +247,33 @@ fastaRefVirus = Channel.
 gtfHuman = Channel.
          fromPath('${params.gtf}/*.gtf')
 
-process createSTARIndex {
-    label 'high_memory'
-    tag "$fasta"
+if (!params.star_index && params.fasta) {
+    process createSTARIndex {
+      label 'high_memory'
+      tag "$fasta"
 
-    publishDir path: { params.saveReference ? "${params.outdir}/reference_genome" : params.outdir },
+      publishDir path: { params.saveReference ? "${params.outdir}/star_idx/reference_genome" : params.outdir },
         saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
-    input:
-    file fasta from fastaRefHuman
-    file gtf from gtfHuman
+      input:
+      file fasta from fastaRefHuman
+      file gtf from gtfHuman
 
-    output:
-    file "HumanSTAR" into star_index
+      output:
+      file "star" into star_index
 
-    script:
-    def avail_mem = task.memory ? "--limitGenomeGenerateRAM ${task.memory.toBytes() - 100000000}" : ''
-    """
-    mkdir HumanSTAR
-    STAR \\
-    --runMode genomeGenerate \\
-    --runThreadN ${task.cpus} \\
-    --sjdbGTFfile $gtf \\
-    --genomeDir HumanSTAR \\
-    --genomeFastaFiles $fasta \\
-    $avail_mem
-    """
+      script:
+      def avail_mem = task.memory ? "--limitGenomeGenerateRAM ${task.memory.toBytes() - 100000000}" : ''
+      """
+      mkdir HumanSTAR
+      STAR \\
+      --runMode genomeGenerate \\
+      --runThreadN ${task.cpus} \\
+      --sjdbGTFfile $gtf \\
+      --genomeDir HumanSTAR \\
+      --genomeFastaFiles $fasta \\
+      $avail_mem
+      """
 }
 
 process createHISATIndex {
@@ -286,6 +293,104 @@ process createHISATIndex {
     """
 }
 
+ /*
+  * STEP 1(b) - SortMeRna (removal of rRNA)
+  */
+
+
+// fetching rRNA databases, the default being 'assets/rRna_data.txt'
+rRNA_database = file(params.rRNA_db)
+if (rRNA_database.isEmpty()) {exit 1, "File ${rRNA_database.getName()} is empty!"}
+Channel
+    .from( rRNA_database.readLines() )
+    .map { row -> file(row) }
+    .set { sortmerna_fasta }
+
+
+process sortMeRna_index {
+  label 'low_memory'
+  tag "${fasta.human}"
+
+  input:
+  file(fasta) from sortmerna_fasta
+
+  output:
+  val("${fasta.human}") into sortmerna_db_name
+  file("$fasta") into sortmerna_db_fasta
+  file("${fasta.human}*") into sortmerna_db
+
+        
+  """
+  indexdb_rna --ref $fasta,${fasta.human} -m 3072 -v
+  """
+    }
+
+    process sortMeRna_filter {
+        label 'low_memory'
+        tag "$sampName"
+        publishDir "${params.outdir}/SortMeRNA", mode: 'copy',
+            saveAs: {filename ->
+                if (filename.indexOf("_rRNA_report.txt") > 0) "logs/$sampName"
+                else if (params.saveNonRiboRNAReads) "reads/$sampName"
+                else null
+            }
+
+        input:
+        set val(sampName), file(reads) from ch_read_files_fastqc
+        val(db_name) from sortmerna_db_name.collect()
+        file(db_fasta) from sortmerna_db_fasta.collect()
+        file(db) from sortmerna_db.collect()
+
+        output:
+        set val(sampName), file("*.fq.gz") into filtered_reads
+        file "*_rRNA_report.txt" into sortmerna_logs
+
+
+        script:
+        //combine files ${db_fasta} and ${db_name}
+        def Refs = ''
+        for (i=0; i<db_fasta.size(); i++) { Refs+= ":${db_fasta[i]},${db_name[i]}" }
+        Refs = Refs.substring(1)
+
+        if (params.singleEnd) {
+            """
+            // grouping all reads together for the next step
+            gzip -d --force < ${reads} > all-reads.fastq
+            sortmerna --ref ${Refs} \
+                --reads all-reads.fastq \
+                --num_alignments 1 \
+                -a ${task.cpus} \
+                --fastx \
+                --aligned rRNA-reads \
+                --other non-rRNA-reads \
+                --log -v
+            gzip --force < non-rRNA-reads.fastq > ${sampName}.fq.gz
+            mv rRNA-reads.log ${sampName}_rRNA_report.txt
+            """
+        } else {
+            """
+            gzip -d --force < ${reads[0]} > reads-fw.fq
+            gzip -d --force < ${reads[1]} > reads-rv.fq
+            merge-paired-reads.sh reads-fw.fq reads-rv.fq all-reads.fastq
+            sortmerna --ref ${Refs} \
+                --reads all-reads.fastq \
+                --num_alignments 1 \
+                -a ${task.cpus} \
+                --fastx --paired_in \
+                --aligned rRNA-reads \
+                --other non-rRNA-reads \
+                --log -v
+            unmerge-paired-reads.sh non-rRNA-reads.fastq non-rRNA-reads-fw.fq non-rRNA-reads-rv.fq
+            gzip < non-rRNA-reads-fw.fq > ${sampName}-fw.fq.gz
+            gzip < non-rRNA-reads-rv.fq > ${sampName}-rv.fq.gz
+            mv rRNA-reads.log ${sampName}_rRNA_report.txt
+            """
+        }
+    }
+} 
+   
+   
+
 /*
  * STEP 2(a) - Align across human reference genome (using STAR)
  */
@@ -303,12 +408,12 @@ process mapReadsHuman {
     }
 
   input:
-  set val(sampName), file(reads) from ch_read_files_fastqc
-  file(human_star_index) from star_index
+  set val(sampName), file(reads) from filtered_reads
+  file("star") from star_index
   file(gtf) from gtfHuman
 
   output:
-  set val(sampName_, file("*Log.final.out"), file ('*.bam') into star_aligned
+  set val(sampName), file("*Log.final.out"), file ('*.bam') into star_aligned
   file "*.out" into alignment_logs
   file "*SJ.out.tab"
   file "*Log.out" into star_log
@@ -336,7 +441,7 @@ process mapReadsHuman {
 process mapReadsVirus {
 
   input:
-  set val(sampName), file(reads) from ch_read_files_fastqc
+  set val(sampName), file(reads) from filtered_reads
   file("virus_hisat2_index.*.ht2") from hisat2_index
 
   output:
