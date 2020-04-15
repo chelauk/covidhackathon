@@ -233,8 +233,6 @@ process get_software_versions {
      """
  }
 
-
-
 /*
  * create indices
  */
