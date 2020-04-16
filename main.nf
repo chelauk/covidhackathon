@@ -36,6 +36,8 @@ def helpMessage() {
       --vfasta                        Path to virus genome fasta file
       --gtf                           Path to human GTF file
       --rRNA_db                       Path to file that contains file paths for rRNA databases (optional)
+      --star_index                    Path to human star index
+      --hisat2_index                  Path to viral hisat2 index
 
 
     Other options:
@@ -136,6 +138,8 @@ summary['Run Name']         = custom_runName ?: workflow.runName
 summary['Reads']            = params.reads
 summary['Human Ref']        = params.hfasta
 summary['Virus Ref']        = params.vfasta
+summary['Human Index']      = params.star_index
+summary['Virus Index']      = params.hisat2_index
 summary['Data Type']        = params.single_end ? 'Single-End' : 'Paired-End'
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
@@ -246,13 +250,14 @@ fastaRefVirus = Channel.
 gtfHuman = Channel.
          fromPath('${params.gtf}/*.gtf')
 
-if (!params.star_index && params.fasta) {
+if (!params.skipAlignment) {
+  if (!params.star_index && params.hfasta) {
     process createSTARIndex {
       label 'high_memory'
       tag "$fasta"
 
-      publishDir path: { params.saveReference ? "${params.hfasta}/" },
-        saveAs: { params.saveReference ? it : null }, mode: 'copy'
+      publishDir path: { params.saveReference ? "${params.hfasta}" : params.hfasta },
+                 saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
       input:
       file fasta from fastaRefHuman
@@ -273,12 +278,16 @@ if (!params.star_index && params.fasta) {
       --genomeFastaFiles $fasta \\
       $avail_mem
       """
+     }
+  }
 }
 
-process createHISATIndex {
+if (!params.skipAlignment) {
+  if (!params.hisat2_index && params.vfasta) {
+  process createHISATIndex {
     tag {reference}
 
-    publishDir path: { params.saveReference ? "${params.vfasta}/" },
+    publishDir path: { params.saveReference ? "${params.vfasta}" : params.vfasta },
       saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
     input:
@@ -290,6 +299,8 @@ process createHISATIndex {
     """
     hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
     """
+    }
+  }
 }
 
  /*
