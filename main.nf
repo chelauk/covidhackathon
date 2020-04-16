@@ -303,19 +303,18 @@ if (!params.skipAlignment) {
   }
 }
 
- /*
-  * STEP 1(b) - SortMeRna (removal of rRNA)
-  */
-
+/*
+* STEP 1(b) - SortMeRna (removal of rRNA)
+*/
 
 // fetching rRNA databases, the default being 'assets/rRna_data.txt'
+
 rRNA_database = file(params.rRNA_db)
 if (rRNA_database.isEmpty()) {exit 1, "File ${rRNA_database.getName()} is empty!"}
 Channel
     .from( rRNA_database.readLines() )
     .map { row -> file(row) }
     .set { sortmerna_fasta }
-
 
 process sortMeRna_index {
   label 'low_memory'
@@ -333,9 +332,9 @@ process sortMeRna_index {
   """
   indexdb_rna --ref $fasta,${fasta.human} -m 3072 -v
   """
-    }
+}
 
-    process sortMeRna_filter {
+process sortMeRna_filter {
         label 'low_memory'
         tag "$sampName"
         publishDir "${params.outdir}/SortMeRNA", mode: 'copy',
@@ -343,7 +342,7 @@ process sortMeRna_index {
                 if (filename.indexOf("_rRNA_report.txt") > 0) "logs/$sampName"
                 else if (params.saveNonRiboRNAReads) "reads/$sampName"
                 else null
-            }
+          }
 
         input:
         set val(sampName), file(reads) from ch_read_files_fastqc
@@ -397,7 +396,7 @@ process sortMeRna_index {
             """
         }
     }
-}
+
 
 
 
