@@ -294,10 +294,12 @@ if (!params.skipAlignment) {
     file(fasta) from fastaRefVirus
 
     output:
-    file("virus_hisat2_index.*.ht2") into hisat2_index
-
+    file("*.ht2") into hisat2_index
+    
+    script:
+    outName = $fasta.basName
     """
-    hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
+    hisat2-build -p ${task.cpus} ${fasta} ${outName}
     """
     }
   }
