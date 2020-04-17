@@ -330,7 +330,7 @@ process sortMeRna_index {
   file("$fasta") into sortmerna_db_fasta
   file("${fasta.human}*") into sortmerna_db
 
-
+  script:
   """
   indexdb_rna --ref $fasta,${fasta.human} -m 3072 -v
   """
