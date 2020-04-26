@@ -13,7 +13,7 @@ def helpMessage() {
     // TODO nf-core: Add to this help message with new command line parameters
     log.info nfcoreHeader()
     log.info"""
-    This pipeline aligns human rna sequences to human and viral references and 
+    This pipeline aligns human rna sequences to human and viral references and
     discards reads common to both
 
     Usage:
@@ -32,11 +32,13 @@ def helpMessage() {
       --single_end [bool]             Specifies that the input is single-end reads
 
     References:                      If not specified in the configuration file or you wish to overwrite any of the references
-      --star_index                    Path to STAR index
-      --fasta                         Path to genome fasta file
-      --gtf                           Path to GTF file
+      --hfasta                        Path to human genome fasta file
+      --vfasta                        Path to virus genome fasta file
+      --gtf                           Path to human GTF file
       --rRNA_db                       Path to file that contains file paths for rRNA databases (optional)
-      
+      --star_index                    Path to human star index
+      --hisat2_index                  Path to viral hisat2 index
+
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -134,7 +136,10 @@ if (workflow.revision) summary['Pipeline Release'] = workflow.revision
 summary['Run Name']         = custom_runName ?: workflow.runName
 // TODO nf-core: Report custom parameters here
 summary['Reads']            = params.reads
-summary['Fasta Ref']        = params.fasta
+summary['Human Ref']        = params.hfasta
+summary['Virus Ref']        = params.vfasta
+summary['Human Index']      = params.star_index
+summary['Virus Index']      = params.hisat2_index
 summary['Data Type']        = params.single_end ? 'Single-End' : 'Paired-End'
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
@@ -232,8 +237,6 @@ process get_software_versions {
      """
  }
 
-
-
 /*
  * create indices
  */
@@ -241,19 +244,20 @@ process get_software_versions {
 // create STAR index for human reference genome in case it is absent
 
 fastaRefHuman = Channel.
-              fromPath('${params.fasta}/*.fa')
+              fromPath('${params.hfasta}/*.fa')
 fastaRefVirus = Channel.
-              fromPath('${params.fasta}/*.fa')
+              fromPath('${params.vfasta}/*.fa')
 gtfHuman = Channel.
          fromPath('${params.gtf}/*.gtf')
 
-if (!params.star_index && params.fasta) {
+if (!params.skipAlignment) {
+  if (!params.star_index && params.hfasta) {
     process createSTARIndex {
       label 'high_memory'
       tag "$fasta"
 
-      publishDir path: { params.saveReference ? "${params.outdir}/star_idx/reference_genome" : params.outdir },
-        saveAs: { params.saveReference ? it : null }, mode: 'copy'
+      publishDir path: { params.saveReference ? "${params.hfasta}" : params.hfasta },
+                 saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
       input:
       file fasta from fastaRefHuman
@@ -274,38 +278,45 @@ if (!params.star_index && params.fasta) {
       --genomeFastaFiles $fasta \\
       $avail_mem
       """
+     }
+  }
 }
 
-process createHISATIndex {
+if (!params.skipAlignment) {
+  if (!params.hisat2_index && params.vfasta) {
+  process createHISATIndex {
     tag {reference}
 
-    publishDir params.outdir, mode: params.publishDirMode,
-        saveAs: {params.saveGenomeIndex ? "reference_genome/hisat2Index/${species}/${it}" : null }
+    publishDir path: { params.saveReference ? "${params.vfasta}" : params.vfasta },
+      saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
     input:
-    set val(species = "${fasta.baseName}"), file(fasta) from fastaRefVirus
+    file(fasta) from fastaRefVirus
 
     output:
-    file("virus_hisat2_index.*.ht2") into hisat2_index
-
+    file("*.ht2") into hisat2_index
+    
+    script:
+    outName = $fasta.basName
     """
-    hisat2-build -p ${task.cpus} $fasta $virus_hisat2_index
+    hisat2-build -p ${task.cpus} ${fasta} ${outName}
     """
+    }
+  }
 }
 
- /*
-  * STEP 1(b) - SortMeRna (removal of rRNA)
-  */
-
+/*
+* STEP 1(b) - SortMeRna (removal of rRNA)
+*/
 
 // fetching rRNA databases, the default being 'assets/rRna_data.txt'
+
 rRNA_database = file(params.rRNA_db)
 if (rRNA_database.isEmpty()) {exit 1, "File ${rRNA_database.getName()} is empty!"}
 Channel
     .from( rRNA_database.readLines() )
     .map { row -> file(row) }
     .set { sortmerna_fasta }
-
 
 process sortMeRna_index {
   label 'low_memory'
@@ -319,13 +330,13 @@ process sortMeRna_index {
   file("$fasta") into sortmerna_db_fasta
   file("${fasta.human}*") into sortmerna_db
 
-        
+  script:
   """
   indexdb_rna --ref $fasta,${fasta.human} -m 3072 -v
   """
-    }
+}
 
-    process sortMeRna_filter {
+process sortMeRna_filter {
         label 'low_memory'
         tag "$sampName"
         publishDir "${params.outdir}/SortMeRNA", mode: 'copy',
@@ -333,7 +344,7 @@ process sortMeRna_index {
                 if (filename.indexOf("_rRNA_report.txt") > 0) "logs/$sampName"
                 else if (params.saveNonRiboRNAReads) "reads/$sampName"
                 else null
-            }
+          }
 
         input:
         set val(sampName), file(reads) from ch_read_files_fastqc
@@ -387,9 +398,9 @@ process sortMeRna_index {
             """
         }
     }
-} 
-   
-   
+
+
+
 
 /*
  * STEP 2(a) - Align across human reference genome (using STAR)
@@ -413,12 +424,11 @@ process mapReadsHuman {
   file(gtf) from gtfHuman
 
   output:
-  set val(sampName), file("*Log.final.out"), file ('*.bam') into star_aligned
+  set val(sampName), file("*Log.final.out"), file ("*.bam") into star_aligned
   file "*.out" into alignment_logs
   file "*SJ.out.tab"
   file "*Log.out" into star_log
   file "*Unmapped*" optional true
-  file "${prefix}Aligned.sortedByCoord.out.bam.bai" into bam_index_rseqc, bam_index_genebody
 
   script:
   def star_mem = task.memory ?: params.star_memory ?: false
