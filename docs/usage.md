@@ -13,8 +13,10 @@
   * [`--single_end`](#--single_end)
 * [Reference genomes](#reference-genomes)
   * [`--genome` (using iGenomes)](#--genome-using-igenomes)
-  * [`--fasta`](#--fasta)
+  * [`--star_index`, `--hisat2_index`, `--hfasta`, `--vfasta`, `--gtf`](#--star_index---hisat2_index---hfasta---vfasta---gtf)
   * [`--igenomes_ignore`](#--igenomes_ignore)
+* [Ribosomal RNA removal](#ribosomal-rna-removal)
+  * [`--rRNA_database`](#--rrna_database)
 * [Job resources](#job-resources)
   * [Automatic resubmission](#automatic-resubmission)
   * [Custom resource requests](#custom-resource-requests)
@@ -101,6 +103,8 @@ They are loaded in sequence, so later profiles can overwrite earlier profiles.
 
 If `-profile` is not specified, the pipeline will run locally and expect all software to be installed and available on the `PATH`. This is _not_ recommended.
 
+* `awsbatch`
+  * A generic configuration profile to be used with AWS Batch.
 * `conda`
   * A generic configuration profile to be used with [conda](https://conda.io/docs/)
   * Pulls most software from [Bioconda](https://bioconda.github.io/)
@@ -113,6 +117,7 @@ If `-profile` is not specified, the pipeline will run locally and expect all sof
 * `test`
   * A profile with a complete configuration for automated testing
   * Includes links to test data so needs no other parameters
+  
 
 <!-- TODO nf-core: Document required command line parameters -->
 
@@ -173,7 +178,9 @@ The syntax for this reference configuration is as follows:
 params {
   genomes {
     'GRCh38' {
+      star    = '<path to the star index folder>'
       fasta   = '<path to the genome fasta file>' // Used if no star index given
+      gtf     = '<path to the genome gtf file>'
     }
     // Any number of additional genomes, key is used with --genome
   }
@@ -182,17 +189,30 @@ params {
 
 <!-- TODO nf-core: Describe reference path flags -->
 
-### `--fasta`
+### `--star_index`, `--hisat2_index`, `--hfasta`, `--vfasta`, `--gtf`
 
 If you prefer, you can specify the full path to your reference genome when you run the pipeline:
 
 ```bash
---fasta '[path to Fasta reference]'
+--star_index '/path/to/STAR/index' \
+--hisat2_index '/path/to/HISAT2/index' \
+--hfasta '/path/to/human_reference.fasta' \
+--vfasta '/path/to/virus_reference.fasta' \
+--gtf '/path/to/gene_annotation.gtf' 
 ```
 
 ### `--igenomes_ignore`
 
 Do not load `igenomes.config` when running the pipeline. You may choose this option if you observe clashes between custom parameters and those supplied in `igenomes.config`.
+
+## Ribosomal RNA removal
+
+rRNA removal is facilitated as an additional step for read filtration. In order, to use a custom ribosomal rna database, use the following parameter
+
+### `--rRNA_database`
+
+By default, rRNA databases in github [`biocore/sortmerna/rRNA_databases`](https://github.com/biocore/sortmerna/tree/master/rRNA_databases) are used. Here the path to a text file can be provided that contains paths to fasta files (one per line, no ' or " for file names) that will be used for database creation for SortMeRNA instead of the default ones. You can see an example in the directory `assets/rRna_data.txt`. Consequently, similar reads to these sequences will be removed.
+
 
 ## Job resources
 
