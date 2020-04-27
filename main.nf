@@ -31,6 +31,19 @@ def helpMessage() {
       --genome [str]                  Name of iGenomes reference
       --single_end [bool]             Specifies that the input is single-end reads
 
+    References                        If not specified in the configuration file or you wish to overwrite any of the references
+      --fasta [file]                  Path to human fasta reference
+      --gtf [file]                    Path to human GTF file
+      --vfasta [file]                 Path to virus fasta reference
+    
+    STAR options:
+      --saveReference [bool]          Save STAT output: human genome index
+      --saveUnaligned [bool]          Save unaligned reads
+      --star_memory
+
+    HISAT options:        
+      --saveGenomeIndex [bool]        Save HISAT output: virus genome index
+
     References:                      If not specified in the configuration file or you wish to overwrite any of the references
       --hfasta                        Path to human genome fasta file
       --vfasta                        Path to virus genome fasta file
@@ -38,7 +51,6 @@ def helpMessage() {
       --rRNA_db                       Path to file that contains file paths for rRNA databases (optional)
       --star_index                    Path to human star index
       --hisat2_index                  Path to viral hisat2 index
-
 
     Other options:
       --outdir [file]                 The output directory where the results will be saved
@@ -84,6 +96,10 @@ params.gtf = params.genome ? params.genomes[ params.genome ].gtf ?: false : fals
 //   file fasta from ch_fasta
 
 
+// Virus reference genome
+// TODO Add virus iGenomes parameter
+if (params.vfasta) { ch_vfasta = file(params.vfasta, checkIfExists: true) }
+
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
 custom_runName = params.name
@@ -127,6 +143,12 @@ if (params.readPaths) {
         .fromFilePairs(params.reads, size: params.single_end ? 1 : 2)
         .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nIf this is single-end data, please specify --single_end on the command line." }
         .into { ch_read_files_fastqc; ch_read_files_trimming }
+}
+// Copy channel several times to be used multiple times
+ch_read_files_fastqc.into {
+    ch_read_files_fastqc1
+    ch_read_files_fastqc2
+    ch_read_files_fastqc3
 }
 
 // Header log info
@@ -226,7 +248,7 @@ process get_software_versions {
                  }
 
      input:
-     set val(name), file(reads) from ch_read_files_fastqc
+     set val(name), file(reads) from ch_read_files_fastqc1
 
      output:
      file "*_fastqc.{zip,html}" into ch_fastqc_results
@@ -243,12 +265,18 @@ process get_software_versions {
 
 // create STAR index for human reference genome in case it is absent
 
-fastaRefHuman = Channel.
-              fromPath('${params.hfasta}/*.fa')
-fastaRefVirus = Channel.
-              fromPath('${params.vfasta}/*.fa')
-gtfHuman = Channel.
-         fromPath('${params.gtf}/*.gtf')
+Channel
+    .fromPath(params.fasta)
+    .map { item -> [ item.baseName, item ]}
+    .set { fastaRefHuman }
+Channel
+    .fromPath(params.gtf)
+    .map { item -> [ item.baseName, item ]}
+    .into { gtfHuman1; gtfHuman2 }
+Channel
+    .fromPath(params.vfasta)
+    .map { item -> [ item.baseName, item ]}
+    .set { fastaRefVirus }
 
 if (!params.skipAlignment) {
   if (!params.star_index && params.hfasta) {
@@ -291,6 +319,15 @@ if (!params.skipAlignment) {
       saveAs: { params.saveReference ? it : null }, mode: 'copy'
 
     input:
+    set val(species), file(fasta) from fastaRefVirus
+
+    output:
+    set val(species), file("${species}.*.ht2") into hisat2_index
+
+    script: 
+    """
+    hisat2-build -p ${task.cpus} $fasta $species
+=======
     file(fasta) from fastaRefVirus
 
     output:
@@ -306,8 +343,8 @@ if (!params.skipAlignment) {
 }
 
 /*
-* STEP 1(b) - SortMeRna (removal of rRNA)
-*/
+ * STEP 1(b) - SortMeRna (removal of rRNA)
+ */
 
 // fetching rRNA databases, the default being 'assets/rRna_data.txt'
 
@@ -451,14 +488,15 @@ process mapReadsHuman {
 process mapReadsVirus {
 
   input:
-  set val(sampName), file(reads) from filtered_reads
-  file("virus_hisat2_index.*.ht2") from hisat2_index
+  set val(sampName), file(reads) from ch_read_files_fastqc3
+  set val(species), file(index) from hisat2_index
 
   output:
-  set sampName, species, file("*temp.bam") into alignment
+  set sampName, species, file("${sampName}.${species}.temp.bam") into alignment
 
+  script:
   """
-  hisat2 -x $index -U $reads -p ${task.cpus} |
+  hisat2 -x $species -U $reads -p ${task.cpus} -S ${sampName}.${species}.temp.sam
 
   samtools view -bS ${sampName}.${species}.temp.sam > ${sampName}.${species}.temp.bam
   """
@@ -469,28 +507,32 @@ process mapReadsVirus {
 process sortBam{
 
   input:
-  set sampName, species, file(tmp) from alignment
+  set val(sampName), val(species), file(tmp) from alignment
 
   output:
-  file("${sampName}"."${species}".bam) into bamSort
+  set val(sampName), \
+  val(species), \
+  file("${sampName}.${species}.bam") into bamSort
 
+  script:
   """
-  samtools sort -o "${sampName}"."${species}".bam $tmp
+  samtools sort $tmp ${sampName}.${species}
   """
 }
 
 // Index bam
 process indexBams {
 
-  publishDir "results/alignments", mode: 'copy'
+  publishDir "${params.outdir}/alignments", mode: 'copy'
 
   input:
-  set sampNames, species, file(bam) from bamsort
+  set val(sampName), val(species), file(bam) from bamSort
 
   output:
   file("${bam}.bai") into bamsidx
-  file("${bam}") into bamsout
+  set val(sampName), val(species), file("${bam}") into bamVirus
 
+  script:
   """
   samtools index -b $bam
   """
@@ -499,48 +541,15 @@ process indexBams {
 /*
  * Step 3 : Identify common reads mapped to both viral and human reference genome
  *
- * The branch operator allows you to forward the items emitted by a source
- * channel to one or more output channels, choosing one out of them at a time.
- *
- * The selection criteria is defined by specifying a closure that provides one
- * or more boolean expression, each of which is identified by a unique label.
- * On the first expression that evaluates to a true value, the current item is
- * bound to a named channel as the label identifier. For example:
- *
- * Channel
- *    .from(1,2,3,40,50)
- *    .branch {
- *        small: it < 10
- *        large: it > 10
- *    }
- *    .set { result }
- *  result.small.view { "$it is small" }
- *  result.large.view { "$it is large" }
- *
- * it shows
- * 1 is small
- * 2 is small
- * 3 is small
- * 40 is large
- * 50 is large
- *
  */
+ 
 
-Channel
-    .from(bamsOut)
-    .branch {
-        virus: it  ~/SARS_COV/
-        human: it  ~/hg38/
-        }
-    .set{bams}
-
-// bams = Channel.fromFilePairs("${params.alignmentPath}/*{hg38,${params.virus}}.bam", flat: true)
 
 process makeSharedList {
 
   input:
-  set val(sampName), val(species), file(humanBam), from bams.human
-  set val(sampName), val(species), file(virusBam), from bams.virus
+  set val(sampName), val(species), file(humanBam) from bamHuman
+  set val(sampName), val(species), file(virusBam) from bamVirus
 
   output:
   file("shared.list") into sharedList
@@ -555,24 +564,31 @@ process makeSharedList {
   """
 }
 
+sharedList.into {
+     sharedList1
+     sharedList2
+}
+
+// TODO Test-check the remaining script starting from here
+
 process filterHuman {
 
   input:
-  file(sharedReads) from sharedList
-  set sampName, file(human) from humanList
+  file(sharedReads) from sharedList1
+  set val(sampName), file(human) from humanList
 
   output:
-  file("${sampName}"."_human.uniq.bam") into humanFinal
+  file("${sampName}_human.uniq.bam") into humanFinal
 
   """
-  picard FilterSamReads I=$human O="${sampName}""_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
+  picard FilterSamReads I=$human O="${sampName}_human.uniq.bam" READ_LIST_FILE=$sharedReads FILTER=excludeReadList SORT_ORDER=coordinate
   """
 }
 
 process filterVirus {
 
   input:
-  file(sharedReads) from shareList
+  file(sharedReads) from sharedList2
   set sampName, file(virus) from virusList
 
   output:
@@ -696,8 +712,8 @@ process multiqc {
     input:
     file multiqc_config from ch_multiqc_config
     // TODO nf-core: Add in log files from your new processes for MultiQC to find!
-    file ('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
-    file ('software_versions/*') from ch_software_versions_yaml.collect()
+    file('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
+    file('software_versions/*') from ch_software_versions_yaml.collect()
     file workflow_summary from create_workflow_summary(summary)
 
     output:
